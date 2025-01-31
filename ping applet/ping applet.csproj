@@ -7,13 +7,13 @@
     <ProjectGuid>{7354A948-8CA4-47C8-BB67-CC1926F74237}</ProjectGuid>
     <OutputType>WinExe</OutputType>
     <RootNamespace>ping_applet</RootNamespace>
-    <AssemblyName>ping applet</AssemblyName>
+    <AssemblyName>pingApplet</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>
     <TargetFrameworkProfile />
-	<LangVersion>8.0</LangVersion>
+    <LangVersion>8.0</LangVersion>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>

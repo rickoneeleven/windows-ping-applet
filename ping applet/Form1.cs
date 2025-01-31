@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using System.Net.NetworkInformation;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace ping_applet
 {
@@ -17,6 +18,7 @@ namespace ping_applet
         {
             InitializeComponent();
             InitializeCustomComponents();
+            this.FormClosing += Form1_FormClosing;
             DetectGateway();
             StartPingTimer();
         }
@@ -41,10 +43,91 @@ namespace ping_applet
             FormBorderStyle = FormBorderStyle.None;
         }
 
+        private string GetDefaultGateway()
+        {
+            try
+            {
+                // Get all network interfaces
+                NetworkInterface[] interfaces = NetworkInterface.GetAllNetworkInterfaces();
+
+                // Filter for active interfaces that support IPv4
+                var activeInterface = interfaces.FirstOrDefault(ni =>
+                    ni.OperationalStatus == OperationalStatus.Up &&
+                    ni.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
+                    ni.Supports(NetworkInterfaceComponent.IPv4) &&
+                    ni.GetIPProperties().GatewayAddresses.Count > 0);
+
+                if (activeInterface != null)
+                {
+                    // Get the first IPv4 gateway address
+                    var gateway = activeInterface.GetIPProperties()
+                        .GatewayAddresses
+                        .FirstOrDefault()?.Address.ToString();
+
+                    if (!string.IsNullOrEmpty(gateway))
+                    {
+                        return gateway;
+                    }
+                }
+
+                throw new Exception("No default gateway found");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Unable to get default gateway: {ex.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Application.Exit();
+                return null;
+            }
+        }
+
         private void DetectGateway()
         {
-            // For now, using a placeholder IP
-            gatewayIP = "8.8.4.4";
+            string detectedGateway = GetDefaultGateway();
+            if (detectedGateway == null)
+            {
+                return; // Application will exit from GetDefaultGateway
+            }
+
+            gatewayIP = detectedGateway;
+            SetupNetworkChangeDetection();
+        }
+
+        private void SetupNetworkChangeDetection()
+        {
+            NetworkChange.NetworkAddressChanged += async (s, e) =>
+            {
+                // Update gateway when network changes
+                string newGateway = GetDefaultGateway();
+                if (newGateway == null)
+                {
+                    return; // Application will exit from GetDefaultGateway
+                }
+
+                gatewayIP = newGateway;
+                // Force immediate ping to test new gateway
+                await PingGateway();
+            };
+
+            NetworkChange.NetworkAvailabilityChanged += async (s, e) =>
+            {
+                if (e.IsAvailable)
+                {
+                    // Recheck gateway when network becomes available
+                    string newGateway = GetDefaultGateway();
+                    if (newGateway == null)
+                    {
+                        return; // Application will exit from GetDefaultGateway
+                    }
+                    gatewayIP = newGateway;
+                    await PingGateway();
+                }
+                else
+                {
+                    // Update icon to show network is unavailable
+                    trayIcon.Icon = CreateNumberIcon("!", true);
+                }
+            };
         }
 
         private void StartPingTimer()
@@ -132,7 +215,6 @@ namespace ping_applet
             Application.Exit();
         }
 
-        // Add cleanup code to Form_FormClosing event
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
             trayIcon?.Dispose();

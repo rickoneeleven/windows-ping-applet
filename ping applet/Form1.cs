@@ -70,13 +70,24 @@ namespace ping_applet
                     }
                 }
 
-                throw new Exception("No default gateway found");
+                // Only show message box and exit if this is the initial gateway detection
+                if (string.IsNullOrEmpty(gatewayIP))
+                {
+                    MessageBox.Show("No default gateway found. Please check your network connection.",
+                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    Application.Exit();
+                }
+                return null;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Unable to get default gateway: {ex.Message}", "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Application.Exit();
+                // Only show message box and exit if this is the initial gateway detection
+                if (string.IsNullOrEmpty(gatewayIP))
+                {
+                    MessageBox.Show($"Unable to get default gateway: {ex.Message}",
+                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    Application.Exit();
+                }
                 return null;
             }
         }
@@ -84,49 +95,30 @@ namespace ping_applet
         private void DetectGateway()
         {
             string detectedGateway = GetDefaultGateway();
-            if (detectedGateway == null)
+            if (!string.IsNullOrEmpty(detectedGateway))
             {
-                return; // Application will exit from GetDefaultGateway
+                gatewayIP = detectedGateway;
+                SetupNetworkChangeDetection();
             }
-
-            gatewayIP = detectedGateway;
-            SetupNetworkChangeDetection();
+            // If detection fails, GetDefaultGateway will handle the error and exit the application
         }
 
         private void SetupNetworkChangeDetection()
         {
-            NetworkChange.NetworkAddressChanged += async (s, e) =>
+            NetworkChange.NetworkAddressChanged += (s, e) =>
             {
-                // Update gateway when network changes
-                string newGateway = GetDefaultGateway();
-                if (newGateway == null)
-                {
-                    return; // Application will exit from GetDefaultGateway
-                }
-
-                gatewayIP = newGateway;
-                // Force immediate ping to test new gateway
-                await PingGateway();
+                // Just force a new ping attempt when network changes
+                PingGateway();
             };
 
-            NetworkChange.NetworkAvailabilityChanged += async (s, e) =>
+            NetworkChange.NetworkAvailabilityChanged += (s, e) =>
             {
-                if (e.IsAvailable)
-                {
-                    // Recheck gateway when network becomes available
-                    string newGateway = GetDefaultGateway();
-                    if (newGateway == null)
-                    {
-                        return; // Application will exit from GetDefaultGateway
-                    }
-                    gatewayIP = newGateway;
-                    await PingGateway();
-                }
-                else
+                if (!e.IsAvailable)
                 {
                     // Update icon to show network is unavailable
                     trayIcon.Icon = CreateNumberIcon("!", true);
                 }
+                // When network becomes available again, just let the regular ping timer handle it
             };
         }
 

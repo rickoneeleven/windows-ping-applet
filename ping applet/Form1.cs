@@ -44,7 +44,7 @@ namespace ping_applet
         private void DetectGateway()
         {
             // For now, using a placeholder IP
-            gatewayIP = "64.71.34.109";
+            gatewayIP = "8.8.4.4";
         }
 
         private void StartPingTimer()
@@ -64,16 +64,37 @@ namespace ping_applet
             {
                 g.Clear(isError ? Color.Red : Color.Black);
 
-                using (Font font = new Font("Arial", 8, FontStyle.Bold))
+                float fontSize = number.Length switch
+                {
+                    1 => 10f,
+                    2 => 8f,
+                    3 => 6f,
+                    _ => 5f
+                };
+
+                // Create initial font
+                Font currentFont = new Font("Arial", fontSize, FontStyle.Bold);
+
                 using (Brush brush = new SolidBrush(Color.White))
                 {
+                    SizeF textSize = g.MeasureString(number, currentFont);
+
+                    // Adjust size if needed
+                    if (textSize.Width > 15 || textSize.Height > 15)
+                    {
+                        float scale = Math.Min(15 / textSize.Width, 15 / textSize.Height);
+                        currentFont.Dispose();
+                        currentFont = new Font("Arial", fontSize * scale, FontStyle.Bold);
+                    }
+
                     StringFormat sf = new StringFormat
                     {
                         Alignment = StringAlignment.Center,
                         LineAlignment = StringAlignment.Center
                     };
-                    g.DrawString(number, font, brush,
-                        new RectangleF(0, 0, 16, 16), sf);
+
+                    g.DrawString(number, currentFont, brush, new RectangleF(0, 0, 16, 16), sf);
+                    currentFont.Dispose();
                 }
 
                 IntPtr hIcon = bitmap.GetHicon();

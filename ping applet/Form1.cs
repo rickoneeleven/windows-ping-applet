@@ -4,6 +4,8 @@ using System.Windows.Forms;
 using System.Net.NetworkInformation;
 using System.Threading.Tasks;
 using System.Linq;
+using System.IO;
+using System.Reflection;
 
 namespace ping_applet
 {
@@ -16,6 +18,24 @@ namespace ping_applet
         private bool isDisposing = false;
         private const int PING_INTERVAL = 1000; // 1 second
         private const int PING_TIMEOUT = 1000;  // 1 second timeout
+
+        // Keep the static field for the places in code that reference it
+        private static readonly string BuildTimestamp = GetBuildDate().ToString("dd/MM/yy HH:mm");
+
+        private static DateTime GetBuildDate()
+        {
+            try
+            {
+                // Get the assembly file's last write time
+                string filePath = Assembly.GetExecutingAssembly().Location;
+                return File.GetLastWriteTime(filePath);
+            }
+            catch
+            {
+                // If we can't get the build date for some reason, return current time
+                return DateTime.Now;
+            }
+        }
 
         public Form1()
         {
@@ -54,7 +74,8 @@ namespace ping_applet
                 {
                     Icon = CreateNumberIcon("--"),
                     Visible = true,
-                    ContextMenuStrip = contextMenu
+                    ContextMenuStrip = contextMenu,
+                    Text = $"Built: {BuildTimestamp}\nInitializing..."
                 };
 
                 // Configure form
@@ -115,8 +136,14 @@ namespace ping_applet
             {
                 if (!isDisposing && trayIcon != null)
                 {
-                    var icon = CreateNumberIcon(errorText, true);
-                    trayIcon.Icon = icon;
+                    Icon newIcon = CreateNumberIcon(errorText, true);
+                    Icon oldIcon = trayIcon.Icon;
+                    trayIcon.Icon = newIcon;
+                    if (oldIcon != null && oldIcon != newIcon)
+                    {
+                        oldIcon.Dispose();
+                    }
+                    trayIcon.Text = $"Built: {BuildTimestamp}\nError: {errorText}";
                 }
             }
             catch
@@ -257,27 +284,28 @@ namespace ping_applet
                     PingReply reply = await ping.SendPingAsync(gatewayIP, PING_TIMEOUT);
                     if (!isDisposing && trayIcon != null)
                     {
-                        // Always create a new icon regardless of previous state
                         if (reply.Status == IPStatus.Success)
                         {
-                            using (Icon newIcon = CreateNumberIcon(reply.RoundtripTime.ToString()))
+                            Icon newIcon = CreateNumberIcon(reply.RoundtripTime.ToString());
+                            Icon oldIcon = trayIcon.Icon;
+                            trayIcon.Icon = newIcon;
+                            if (oldIcon != null && oldIcon != newIcon)
                             {
-                                // Dispose old icon before assigning new one
-                                Icon oldIcon = trayIcon.Icon;
-                                trayIcon.Icon = newIcon;
-                                oldIcon?.Dispose();
+                                oldIcon.Dispose();
                             }
-                            trayIcon.Text = $"Pinging: {gatewayIP}\nLatency: {reply.RoundtripTime}ms";
+
+                            trayIcon.Text = $"Built: {BuildTimestamp}\nPinging: {gatewayIP}\nLatency: {reply.RoundtripTime}ms";
                         }
                         else
                         {
-                            using (Icon newIcon = CreateNumberIcon("X", true))
+                            Icon newIcon = CreateNumberIcon("X", true);
+                            Icon oldIcon = trayIcon.Icon;
+                            trayIcon.Icon = newIcon;
+                            if (oldIcon != null && oldIcon != newIcon)
                             {
-                                Icon oldIcon = trayIcon.Icon;
-                                trayIcon.Icon = newIcon;
-                                oldIcon?.Dispose();
+                                oldIcon.Dispose();
                             }
-                            trayIcon.Text = $"Failed to ping {gatewayIP}";
+                            trayIcon.Text = $"Built: {BuildTimestamp}\nFailed to ping {gatewayIP}";
                         }
                     }
                 }
@@ -286,13 +314,14 @@ namespace ping_applet
             {
                 if (!isDisposing && trayIcon != null)
                 {
-                    using (Icon newIcon = CreateNumberIcon("!", true))
+                    Icon newIcon = CreateNumberIcon("!", true);
+                    Icon oldIcon = trayIcon.Icon;
+                    trayIcon.Icon = newIcon;
+                    if (oldIcon != null && oldIcon != newIcon)
                     {
-                        Icon oldIcon = trayIcon.Icon;
-                        trayIcon.Icon = newIcon;
-                        oldIcon?.Dispose();
+                        oldIcon.Dispose();
                     }
-                    trayIcon.Text = "Network error occurred";
+                    trayIcon.Text = $"Built: {BuildTimestamp}\nNetwork error occurred";
                 }
             }
         }

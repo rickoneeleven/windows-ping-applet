@@ -81,7 +81,6 @@
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
-    <PreBuildEvent>
-    </PreBuildEvent>
+    <PreBuildEvent>powershell.exe -ExecutionPolicy Bypass -NoProfile -File "$(ProjectDir)update-build-time.ps1"</PreBuildEvent>
   </PropertyGroup>
 </Project>

@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -10,9 +10,10 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("Royal College of Physicians")]
 [assembly: AssemblyProduct("ping applet")]
-[assembly: AssemblyCopyright("Copyright © Royal College of Physicians 2025")]
+[assembly: AssemblyCopyright("Copyright � Royal College of Physicians 2025")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
+[assembly: AssemblyMetadata("BuildTimestamp", "03/02/25 16:43")]  // Will be updated by build script
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from

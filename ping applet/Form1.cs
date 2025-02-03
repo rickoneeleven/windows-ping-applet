@@ -19,21 +19,22 @@ namespace ping_applet
         private const int PING_INTERVAL = 1000; // 1 second
         private const int PING_TIMEOUT = 1000;  // 1 second timeout
 
-        // Keep the static field for the places in code that reference it
-        private static readonly string BuildTimestamp = GetBuildDate().ToString("dd/MM/yy HH:mm");
+        private static readonly string BuildTimestamp = GetBuildDate();
 
-        private static DateTime GetBuildDate()
+        private static string GetBuildDate()
         {
             try
             {
-                // Get the assembly file's last write time
-                string filePath = Assembly.GetExecutingAssembly().Location;
-                return File.GetLastWriteTime(filePath);
+                var assembly = Assembly.GetExecutingAssembly();
+                var attribute = assembly.GetCustomAttributes(typeof(AssemblyMetadataAttribute), false)
+                    .Cast<AssemblyMetadataAttribute>()
+                    .FirstOrDefault(attr => attr.Key == "BuildTimestamp");
+
+                return attribute?.Value ?? "Unknown";
             }
             catch
             {
-                // If we can't get the build date for some reason, return current time
-                return DateTime.Now;
+                return "Unknown";
             }
         }
 

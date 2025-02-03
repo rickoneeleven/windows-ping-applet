@@ -13,34 +13,59 @@ namespace ping_applet
         private ContextMenuStrip contextMenu;
         private System.Windows.Forms.Timer pingTimer;
         private string gatewayIP;
+        private bool isDisposing = false;
+        private const int PING_INTERVAL = 1000; // 1 second
+        private const int PING_TIMEOUT = 1000;  // 1 second timeout
 
         public Form1()
         {
-            InitializeComponent();
-            InitializeCustomComponents();
-            this.FormClosing += Form1_FormClosing;
-            DetectGateway();
-            StartPingTimer();
+            try
+            {
+                InitializeComponent();
+                InitializeCustomComponents();
+                this.FormClosing += Form1_FormClosing;
+                DetectGateway();
+                StartPingTimer();
+            }
+            catch (Exception ex)
+            {
+                HandleInitializationError(ex);
+            }
+        }
+
+        private void HandleInitializationError(Exception ex)
+        {
+            MessageBox.Show($"Failed to initialize the application: {ex.Message}",
+                "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            isDisposing = true;
+            Application.Exit();
         }
 
         private void InitializeCustomComponents()
         {
-            // Create context menu
-            contextMenu = new ContextMenuStrip();
-            contextMenu.Items.Add("Quit", null, OnQuit);
-
-            // Initialize tray icon
-            trayIcon = new NotifyIcon
+            try
             {
-                Icon = CreateNumberIcon("--"),
-                Visible = true,
-                ContextMenuStrip = contextMenu
-            };
+                // Create context menu
+                contextMenu = new ContextMenuStrip();
+                contextMenu.Items.Add("Quit", null, OnQuit);
 
-            // Configure form
-            ShowInTaskbar = false;
-            WindowState = FormWindowState.Minimized;
-            FormBorderStyle = FormBorderStyle.None;
+                // Initialize tray icon
+                trayIcon = new NotifyIcon
+                {
+                    Icon = CreateNumberIcon("--"),
+                    Visible = true,
+                    ContextMenuStrip = contextMenu
+                };
+
+                // Configure form
+                ShowInTaskbar = false;
+                WindowState = FormWindowState.Minimized;
+                FormBorderStyle = FormBorderStyle.None;
+            }
+            catch (Exception ex)
+            {
+                throw new ApplicationException("Failed to initialize components", ex);
+            }
         }
 
         private string GetDefaultGateway()
@@ -73,145 +98,222 @@ namespace ping_applet
                 // Only show message box and exit if this is the initial gateway detection
                 if (string.IsNullOrEmpty(gatewayIP))
                 {
-                    MessageBox.Show("No default gateway found. Please check your network connection.",
-                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    Application.Exit();
+                    ShowErrorState("GW?");
                 }
                 return null;
             }
             catch (Exception ex)
             {
-                // Only show message box and exit if this is the initial gateway detection
-                if (string.IsNullOrEmpty(gatewayIP))
+                ShowErrorState("ERR");
+                throw new ApplicationException("Failed to detect gateway", ex);
+            }
+        }
+
+        public void ShowErrorState(string errorText)
+        {
+            try
+            {
+                if (!isDisposing && trayIcon != null)
                 {
-                    MessageBox.Show($"Unable to get default gateway: {ex.Message}",
-                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    Application.Exit();
+                    var icon = CreateNumberIcon(errorText, true);
+                    trayIcon.Icon = icon;
                 }
-                return null;
+            }
+            catch
+            {
+                // Ignore any errors during error handling
             }
         }
 
         private void DetectGateway()
         {
-            string detectedGateway = GetDefaultGateway();
-            if (!string.IsNullOrEmpty(detectedGateway))
+            try
             {
-                gatewayIP = detectedGateway;
-                SetupNetworkChangeDetection();
+                string detectedGateway = GetDefaultGateway();
+                if (!string.IsNullOrEmpty(detectedGateway))
+                {
+                    gatewayIP = detectedGateway;
+                    SetupNetworkChangeDetection();
+                }
             }
-            // If detection fails, GetDefaultGateway will handle the error and exit the application
+            catch (Exception)
+            {
+                ShowErrorState("GW!");
+            }
         }
 
         private void SetupNetworkChangeDetection()
         {
-            NetworkChange.NetworkAddressChanged += (s, e) =>
+            try
             {
-                // Just force a new ping attempt when network changes
-                PingGateway();
-            };
-
-            NetworkChange.NetworkAvailabilityChanged += (s, e) =>
-            {
-                if (!e.IsAvailable)
+                NetworkChange.NetworkAddressChanged += async (s, e) =>
                 {
-                    // Update icon to show network is unavailable
-                    trayIcon.Icon = CreateNumberIcon("!", true);
-                }
-                // When network becomes available again, just let the regular ping timer handle it
-            };
+                    try
+                    {
+                        string newGateway = GetDefaultGateway();
+                        if (!string.IsNullOrEmpty(newGateway))
+                        {
+                            gatewayIP = newGateway;
+                        }
+                        await PingGateway(); // Force immediate ping attempt
+                    }
+                    catch
+                    {
+                        ShowErrorState("NET!");
+                    }
+                };
+
+                NetworkChange.NetworkAvailabilityChanged += (s, e) =>
+                {
+                    if (!e.IsAvailable)
+                    {
+                        ShowErrorState("OFF");
+                    }
+                };
+            }
+            catch (Exception)
+            {
+                ShowErrorState("NET!");
+            }
         }
 
         private void StartPingTimer()
         {
-            pingTimer = new System.Windows.Forms.Timer
+            try
             {
-                Interval = 1000 // 1 second
-            };
-            pingTimer.Tick += async (sender, e) => await PingGateway();
-            pingTimer.Start();
+                pingTimer = new System.Windows.Forms.Timer
+                {
+                    Interval = PING_INTERVAL
+                };
+                pingTimer.Tick += async (sender, e) => await PingGateway();
+                pingTimer.Start();
+            }
+            catch (Exception)
+            {
+                ShowErrorState("TMR!");
+            }
         }
 
         private Icon CreateNumberIcon(string number, bool isError = false)
         {
-            using (Bitmap bitmap = new Bitmap(16, 16))
-            using (Graphics g = Graphics.FromImage(bitmap))
+            try
             {
-                g.Clear(isError ? Color.Red : Color.Black);
-
-                float fontSize = number.Length switch
+                using (Bitmap bitmap = new Bitmap(16, 16))
+                using (Graphics g = Graphics.FromImage(bitmap))
                 {
-                    1 => 10f,
-                    2 => 8f,
-                    3 => 6f,
-                    _ => 5f
-                };
+                    g.Clear(isError ? Color.Red : Color.Black);
 
-                // Create initial font
-                Font currentFont = new Font("Arial", fontSize, FontStyle.Bold);
-
-                using (Brush brush = new SolidBrush(Color.White))
-                {
-                    SizeF textSize = g.MeasureString(number, currentFont);
-
-                    // Adjust size if needed
-                    if (textSize.Width > 15 || textSize.Height > 15)
+                    // Determine font size based on text length
+                    float fontSize = number.Length switch
                     {
-                        float scale = Math.Min(15 / textSize.Width, 15 / textSize.Height);
-                        currentFont.Dispose();
-                        currentFont = new Font("Arial", fontSize * scale, FontStyle.Bold);
-                    }
-
-                    StringFormat sf = new StringFormat
-                    {
-                        Alignment = StringAlignment.Center,
-                        LineAlignment = StringAlignment.Center
+                        1 => 10f,
+                        2 => 8f,
+                        3 => 6f,
+                        _ => 5f
                     };
 
-                    g.DrawString(number, currentFont, brush, new RectangleF(0, 0, 16, 16), sf);
-                    currentFont.Dispose();
-                }
+                    using (Font currentFont = new Font("Arial", fontSize, FontStyle.Bold))
+                    using (Brush brush = new SolidBrush(Color.White))
+                    {
+                        // Center text
+                        StringFormat sf = new StringFormat
+                        {
+                            Alignment = StringAlignment.Center,
+                            LineAlignment = StringAlignment.Center
+                        };
 
-                IntPtr hIcon = bitmap.GetHicon();
-                return Icon.FromHandle(hIcon);
+                        g.DrawString(number, currentFont, brush, new RectangleF(0, 0, 16, 16), sf);
+                    }
+
+                    IntPtr hIcon = bitmap.GetHicon();
+                    return Icon.FromHandle(hIcon);
+                }
+            }
+            catch
+            {
+                // If we fail to create a custom icon, return a default system icon
+                return SystemIcons.Error;
             }
         }
 
         private async Task PingGateway()
         {
+            if (isDisposing || trayIcon == null) return;
+
             try
             {
+                if (string.IsNullOrEmpty(gatewayIP))
+                {
+                    DetectGateway();
+                    if (string.IsNullOrEmpty(gatewayIP))
+                    {
+                        ShowErrorState("GW!");
+                        return;
+                    }
+                }
+
                 using (Ping ping = new Ping())
                 {
-                    PingReply reply = await ping.SendPingAsync(gatewayIP, 1000);
-                    if (reply.Status == IPStatus.Success)
+                    PingReply reply = await ping.SendPingAsync(gatewayIP, PING_TIMEOUT);
+                    if (!isDisposing && trayIcon != null)
                     {
-                        trayIcon.Icon = CreateNumberIcon(
-                            reply.RoundtripTime.ToString());
-                    }
-                    else
-                    {
-                        trayIcon.Icon = CreateNumberIcon("X", true);
+                        if (reply.Status == IPStatus.Success)
+                        {
+                            trayIcon.Icon = CreateNumberIcon(reply.RoundtripTime.ToString());
+                            // Update tooltip with current gateway IP
+                            trayIcon.Text = $"Pinging: {gatewayIP}\nLatency: {reply.RoundtripTime}ms";
+                        }
+                        else
+                        {
+                            trayIcon.Icon = CreateNumberIcon("X", true);
+                            trayIcon.Text = $"Failed to ping {gatewayIP}";
+                        }
                     }
                 }
             }
             catch (Exception)
             {
-                trayIcon.Icon = CreateNumberIcon("!", true);
+                if (!isDisposing && trayIcon != null)
+                {
+                    ShowErrorState("!");
+                    trayIcon.Text = "Network error occurred";
+                }
             }
         }
 
         private void OnQuit(object sender, EventArgs e)
         {
-            trayIcon.Visible = false;
+            isDisposing = true;
             Application.Exit();
         }
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
-            trayIcon?.Dispose();
-            contextMenu?.Dispose();
-            pingTimer?.Dispose();
+            isDisposing = true;
+            try
+            {
+                if (trayIcon != null)
+                {
+                    trayIcon.Visible = false;
+                    trayIcon.Dispose();
+                    trayIcon = null;
+                }
+                if (contextMenu != null)
+                {
+                    contextMenu.Dispose();
+                    contextMenu = null;
+                }
+                if (pingTimer != null)
+                {
+                    pingTimer.Stop();
+                    pingTimer.Dispose();
+                    pingTimer = null;
+                }
+            }
+            catch
+            {
+                // Ignore disposal errors
+            }
         }
     }
 }

@@ -257,15 +257,26 @@ namespace ping_applet
                     PingReply reply = await ping.SendPingAsync(gatewayIP, PING_TIMEOUT);
                     if (!isDisposing && trayIcon != null)
                     {
+                        // Always create a new icon regardless of previous state
                         if (reply.Status == IPStatus.Success)
                         {
-                            trayIcon.Icon = CreateNumberIcon(reply.RoundtripTime.ToString());
-                            // Update tooltip with current gateway IP
+                            using (Icon newIcon = CreateNumberIcon(reply.RoundtripTime.ToString()))
+                            {
+                                // Dispose old icon before assigning new one
+                                Icon oldIcon = trayIcon.Icon;
+                                trayIcon.Icon = newIcon;
+                                oldIcon?.Dispose();
+                            }
                             trayIcon.Text = $"Pinging: {gatewayIP}\nLatency: {reply.RoundtripTime}ms";
                         }
                         else
                         {
-                            trayIcon.Icon = CreateNumberIcon("X", true);
+                            using (Icon newIcon = CreateNumberIcon("X", true))
+                            {
+                                Icon oldIcon = trayIcon.Icon;
+                                trayIcon.Icon = newIcon;
+                                oldIcon?.Dispose();
+                            }
                             trayIcon.Text = $"Failed to ping {gatewayIP}";
                         }
                     }
@@ -275,7 +286,12 @@ namespace ping_applet
             {
                 if (!isDisposing && trayIcon != null)
                 {
-                    ShowErrorState("!");
+                    using (Icon newIcon = CreateNumberIcon("!", true))
+                    {
+                        Icon oldIcon = trayIcon.Icon;
+                        trayIcon.Icon = newIcon;
+                        oldIcon?.Dispose();
+                    }
                     trayIcon.Text = "Network error occurred";
                 }
             }

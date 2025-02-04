@@ -353,9 +353,10 @@ namespace ping_applet
         {
             if (isDisposing || trayIcon == null) return;
 
+            Icon newIcon = null;
             try
             {
-                Icon newIcon = CreateNumberIcon(displayText, isError);
+                newIcon = CreateNumberIcon(displayText, isError);
                 Icon oldIcon = trayIcon.Icon;
 
                 trayIcon.Icon = newIcon;
@@ -363,7 +364,7 @@ namespace ping_applet
 
                 UpdateContextMenuStatus();
 
-                if (oldIcon != null && oldIcon != newIcon)
+                if (oldIcon != null)
                 {
                     oldIcon.Dispose();
                 }
@@ -371,15 +372,17 @@ namespace ping_applet
             catch (Exception ex)
             {
                 LogToFile($"Failed to update tray icon: {ex.Message}");
+                newIcon?.Dispose();
             }
         }
 
         private Icon CreateNumberIcon(string number, bool isError = false)
         {
+            IntPtr hIcon = IntPtr.Zero;
             try
             {
-                using (Bitmap bitmap = new Bitmap(16, 16))
-                using (Graphics g = Graphics.FromImage(bitmap))
+                using (var bitmap = new Bitmap(16, 16))
+                using (var g = Graphics.FromImage(bitmap))
                 {
                     g.Clear(isError ? Color.Red : Color.Black);
 
@@ -391,28 +394,50 @@ namespace ping_applet
                         _ => 5f
                     };
 
-                    using (Font currentFont = new Font("Arial", fontSize, FontStyle.Bold))
-                    using (Brush brush = new SolidBrush(Color.White))
+                    using (var currentFont = new Font("Arial", fontSize, FontStyle.Bold))
+                    using (var brush = new SolidBrush(Color.White))
+                    using (var sf = new StringFormat
                     {
-                        StringFormat sf = new StringFormat
-                        {
-                            Alignment = StringAlignment.Center,
-                            LineAlignment = StringAlignment.Center
-                        };
-
+                        Alignment = StringAlignment.Center,
+                        LineAlignment = StringAlignment.Center
+                    })
+                    {
                         g.DrawString(number, currentFont, brush, new RectangleF(0, 0, 16, 16), sf);
                     }
 
-                    IntPtr hIcon = bitmap.GetHicon();
-                    return Icon.FromHandle(hIcon);
+                    hIcon = bitmap.GetHicon();
+                    Icon icon = Icon.FromHandle(hIcon);
+
+                    // Create a new icon that doesn't depend on the handle
+                    using (Icon tmpIcon = icon)
+                    {
+                        return (Icon)tmpIcon.Clone();
+                    }
                 }
             }
             catch (Exception ex)
             {
                 LogToFile($"Icon creation error: {ex.Message}");
-                return SystemIcons.Error;
+                return (Icon)SystemIcons.Error.Clone();
+            }
+            finally
+            {
+                if (hIcon != IntPtr.Zero)
+                {
+                    try
+                    {
+                        DestroyIcon(hIcon);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogToFile($"Failed to destroy icon handle: {ex.Message}");
+                    }
+                }
             }
         }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DestroyIcon(IntPtr hIcon);
 
         public void ShowErrorState(string errorText)
         {

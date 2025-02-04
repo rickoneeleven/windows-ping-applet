@@ -98,21 +98,25 @@ namespace ping_applet
                 NetworkInterface[] interfaces = NetworkInterface.GetAllNetworkInterfaces();
 
                 // Filter for active interfaces that support IPv4
-                var activeInterface = interfaces.FirstOrDefault(ni =>
+                var activeInterfaces = interfaces.Where(ni =>
                     ni.OperationalStatus == OperationalStatus.Up &&
                     ni.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
                     ni.Supports(NetworkInterfaceComponent.IPv4) &&
                     ni.GetIPProperties().GatewayAddresses.Count > 0);
 
-                if (activeInterface != null)
+                // Try each interface until we find a valid gateway
+                foreach (var activeInterface in activeInterfaces)
                 {
-                    // Get the first IPv4 gateway address
                     var gateway = activeInterface.GetIPProperties()
                         .GatewayAddresses
-                        .FirstOrDefault()?.Address.ToString();
+                        .FirstOrDefault(ga =>
+                            ga?.Address != null &&
+                            !ga.Address.Equals(System.Net.IPAddress.Parse("0.0.0.0")))
+                        ?.Address.ToString();
 
                     if (!string.IsNullOrEmpty(gateway))
                     {
+                        trayIcon.Text = $"Built: {BuildTimestamp}\nPinging: {gateway}";
                         return gateway;
                     }
                 }
@@ -126,7 +130,7 @@ namespace ping_applet
             }
             catch (Exception ex)
             {
-                ShowErrorState("ERR");
+                ShowErrorState("GW!");
                 throw new ApplicationException("Failed to detect gateway", ex);
             }
         }

@@ -116,7 +116,7 @@ namespace ping_applet
 
                     if (!string.IsNullOrEmpty(gateway))
                     {
-                        trayIcon.Text = $"Built: {BuildTimestamp}\nPinging: {gateway}";
+                        trayIcon.Text = $"Build: {BuildTimestamp}\nPinging: {gateway}";
                         return gateway;
                     }
                 }

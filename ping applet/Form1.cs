@@ -336,7 +336,7 @@ namespace ping_applet
             {
                 if (contextMenu?.Items.Count > 0 && contextMenu.Items[0] is ToolStripMenuItem statusItem)
                 {
-                    string buildInfo = $"Built: {BuildTimestamp}";
+                    string buildInfo = $"Build: {BuildTimestamp}";
                     statusItem.Text = buildInfo;
 
                     statusItem.DropDownItems.Clear();

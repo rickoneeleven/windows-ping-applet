@@ -15,11 +15,37 @@ namespace ping_applet
         private ContextMenuStrip contextMenu;
         private System.Windows.Forms.Timer pingTimer;
         private string gatewayIP;
-        private bool isDisposing = false;
+        private volatile bool isDisposing = false;
+        private volatile bool isPinging = false;
+        private readonly object pingLock = new object();
+
         private const int PING_INTERVAL = 1000; // 1 second
         private const int PING_TIMEOUT = 1000;  // 1 second timeout
 
         private static readonly string BuildTimestamp = GetBuildDate();
+        private static readonly string LogPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PingApplet",
+            "ping.log"
+        );
+
+        #region Initialization and Setup
+
+        public Form1()
+        {
+            try
+            {
+                InitializeComponent();
+                InitializeCustomComponents();
+                this.FormClosing += Form1_FormClosing;
+                DetectGateway();
+                StartPingTimer();
+            }
+            catch (Exception ex)
+            {
+                HandleInitializationError(ex);
+            }
+        }
 
         private static string GetBuildDate()
         {
@@ -38,36 +64,21 @@ namespace ping_applet
             }
         }
 
-        public Form1()
-        {
-            try
-            {
-                InitializeComponent();
-                InitializeCustomComponents();
-                this.FormClosing += Form1_FormClosing;
-                DetectGateway();
-                StartPingTimer();
-            }
-            catch (Exception ex)
-            {
-                HandleInitializationError(ex);
-            }
-        }
-
-        private void HandleInitializationError(Exception ex)
-        {
-            MessageBox.Show($"Failed to initialize the application: {ex.Message}",
-                "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            isDisposing = true;
-            Application.Exit();
-        }
-
         private void InitializeCustomComponents()
         {
             try
             {
-                // Create context menu
+                // Create context menu with build info and status
                 contextMenu = new ContextMenuStrip();
+
+                // Add status item that will show build info and gateway details
+                var statusItem = new ToolStripMenuItem("Status")
+                {
+                    Enabled = false
+                };
+                contextMenu.Items.Add(statusItem);
+
+                contextMenu.Items.Add(new ToolStripSeparator());
                 contextMenu.Items.Add("Quit", null, OnQuit);
 
                 // Initialize tray icon
@@ -76,8 +87,10 @@ namespace ping_applet
                     Icon = CreateNumberIcon("--"),
                     Visible = true,
                     ContextMenuStrip = contextMenu,
-                    Text = $"Built: {BuildTimestamp}\nInitializing..."
+                    Text = "Initializing..."
                 };
+
+                contextMenu.Opening += (s, e) => UpdateContextMenuStatus();
 
                 // Configure form
                 ShowInTaskbar = false;
@@ -90,21 +103,31 @@ namespace ping_applet
             }
         }
 
+        private void HandleInitializationError(Exception ex)
+        {
+            LogToFile($"Initialization error: {ex.Message}");
+            MessageBox.Show($"Failed to initialize the application: {ex.Message}",
+                "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            isDisposing = true;
+            Application.Exit();
+        }
+
+        #endregion
+
+        #region Network Detection and Monitoring
+
         private string GetDefaultGateway()
         {
             try
             {
-                // Get all network interfaces
                 NetworkInterface[] interfaces = NetworkInterface.GetAllNetworkInterfaces();
 
-                // Filter for active interfaces that support IPv4
                 var activeInterfaces = interfaces.Where(ni =>
                     ni.OperationalStatus == OperationalStatus.Up &&
                     ni.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
                     ni.Supports(NetworkInterfaceComponent.IPv4) &&
                     ni.GetIPProperties().GatewayAddresses.Count > 0);
 
-                // Try each interface until we find a valid gateway
                 foreach (var activeInterface in activeInterfaces)
                 {
                     var gateway = activeInterface.GetIPProperties()
@@ -116,12 +139,12 @@ namespace ping_applet
 
                     if (!string.IsNullOrEmpty(gateway))
                     {
-                        trayIcon.Text = $"Build: {BuildTimestamp}\nPinging: {gateway}";
+                        LogToFile($"Gateway detected: {gateway}");
                         return gateway;
                     }
                 }
 
-                // Only show message box and exit if this is the initial gateway detection
+                LogToFile("No valid gateway found");
                 if (string.IsNullOrEmpty(gatewayIP))
                 {
                     ShowErrorState("GW?");
@@ -130,30 +153,9 @@ namespace ping_applet
             }
             catch (Exception ex)
             {
+                LogToFile($"Gateway detection error: {ex.Message}");
                 ShowErrorState("GW!");
                 throw new ApplicationException("Failed to detect gateway", ex);
-            }
-        }
-
-        public void ShowErrorState(string errorText)
-        {
-            try
-            {
-                if (!isDisposing && trayIcon != null)
-                {
-                    Icon newIcon = CreateNumberIcon(errorText, true);
-                    Icon oldIcon = trayIcon.Icon;
-                    trayIcon.Icon = newIcon;
-                    if (oldIcon != null && oldIcon != newIcon)
-                    {
-                        oldIcon.Dispose();
-                    }
-                    trayIcon.Text = $"Built: {BuildTimestamp}\nError: {errorText}";
-                }
-            }
-            catch
-            {
-                // Ignore any errors during error handling
             }
         }
 
@@ -168,8 +170,9 @@ namespace ping_applet
                     SetupNetworkChangeDetection();
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                LogToFile($"Gateway detection failed: {ex.Message}");
                 ShowErrorState("GW!");
             }
         }
@@ -186,11 +189,13 @@ namespace ping_applet
                         if (!string.IsNullOrEmpty(newGateway))
                         {
                             gatewayIP = newGateway;
+                            LogToFile($"Gateway updated to: {newGateway}");
                         }
                         await PingGateway(); // Force immediate ping attempt
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        LogToFile($"Network change handling error: {ex.Message}");
                         ShowErrorState("NET!");
                     }
                 };
@@ -199,15 +204,21 @@ namespace ping_applet
                 {
                     if (!e.IsAvailable)
                     {
+                        LogToFile("Network became unavailable");
                         ShowErrorState("OFF");
                     }
                 };
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                LogToFile($"Network change detection setup failed: {ex.Message}");
                 ShowErrorState("NET!");
             }
         }
+
+        #endregion
+
+        #region Ping Operations
 
         private void StartPingTimer()
         {
@@ -220,9 +231,146 @@ namespace ping_applet
                 pingTimer.Tick += async (sender, e) => await PingGateway();
                 pingTimer.Start();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                LogToFile($"Timer setup failed: {ex.Message}");
                 ShowErrorState("TMR!");
+            }
+        }
+
+        private async Task PingGateway()
+        {
+            if (isDisposing || trayIcon == null) return;
+            if (isPinging) return;
+
+            try
+            {
+                lock (pingLock)
+                {
+                    if (isPinging) return;
+                    isPinging = true;
+                }
+
+                LogToFile("Starting ping operation...");
+
+                if (string.IsNullOrEmpty(gatewayIP))
+                {
+                    DetectGateway();
+                    if (string.IsNullOrEmpty(gatewayIP))
+                    {
+                        ShowErrorState("GW!");
+                        return;
+                    }
+                }
+
+                using (var ping = new Ping())
+                {
+                    var options = new PingOptions
+                    {
+                        DontFragment = false,
+                        Ttl = 128
+                    };
+
+                    byte[] buffer = new byte[32];
+
+                    try
+                    {
+                        LogToFile($"Sending ping to {gatewayIP}...");
+                        PingReply reply = await ping.SendPingAsync(gatewayIP, PING_TIMEOUT, buffer, options);
+
+                        if (!isDisposing && trayIcon != null)
+                        {
+                            LogToFile($"Ping completed with status: {reply.Status}");
+                            UpdateIconBasedOnReply(reply);
+                        }
+                    }
+                    catch (PingException pex)
+                    {
+                        LogToFile($"Ping exception: {pex.Message}");
+                        ShowErrorState("!");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"General ping error: {ex.Message}");
+                ShowErrorState("!");
+            }
+            finally
+            {
+                isPinging = false;
+            }
+        }
+
+        #endregion
+
+        #region UI Updates
+
+        private void UpdateIconBasedOnReply(PingReply reply)
+        {
+            if (reply == null) return;
+
+            try
+            {
+                if (reply.Status == IPStatus.Success)
+                {
+                    string displayText = reply.RoundtripTime.ToString();
+                    string tooltipText = $"{gatewayIP}: {reply.RoundtripTime}ms";
+                    UpdateTrayIcon(displayText, tooltipText);
+                }
+                else
+                {
+                    string tooltipText = $"{gatewayIP}: Failed";
+                    UpdateTrayIcon("X", tooltipText, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"Icon update error: {ex.Message}");
+            }
+        }
+
+        private void UpdateContextMenuStatus()
+        {
+            try
+            {
+                if (contextMenu?.Items.Count > 0 && contextMenu.Items[0] is ToolStripMenuItem statusItem)
+                {
+                    string buildInfo = $"Built: {BuildTimestamp}";
+                    statusItem.Text = buildInfo;
+
+                    statusItem.DropDownItems.Clear();
+                    statusItem.DropDownItems.Add(new ToolStripMenuItem($"Gateway: {gatewayIP}") { Enabled = false });
+                }
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"Failed to update context menu: {ex.Message}");
+            }
+        }
+
+        private void UpdateTrayIcon(string displayText, string tooltipText, bool isError = false)
+        {
+            if (isDisposing || trayIcon == null) return;
+
+            try
+            {
+                Icon newIcon = CreateNumberIcon(displayText, isError);
+                Icon oldIcon = trayIcon.Icon;
+
+                trayIcon.Icon = newIcon;
+                trayIcon.Text = tooltipText;
+
+                UpdateContextMenuStatus();
+
+                if (oldIcon != null && oldIcon != newIcon)
+                {
+                    oldIcon.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"Failed to update tray icon: {ex.Message}");
             }
         }
 
@@ -235,7 +383,6 @@ namespace ping_applet
                 {
                     g.Clear(isError ? Color.Red : Color.Black);
 
-                    // Determine font size based on text length
                     float fontSize = number.Length switch
                     {
                         1 => 10f,
@@ -247,7 +394,6 @@ namespace ping_applet
                     using (Font currentFont = new Font("Arial", fontSize, FontStyle.Bold))
                     using (Brush brush = new SolidBrush(Color.White))
                     {
-                        // Center text
                         StringFormat sf = new StringFormat
                         {
                             Alignment = StringAlignment.Center,
@@ -261,75 +407,48 @@ namespace ping_applet
                     return Icon.FromHandle(hIcon);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // If we fail to create a custom icon, return a default system icon
+                LogToFile($"Icon creation error: {ex.Message}");
                 return SystemIcons.Error;
             }
         }
 
-        private async Task PingGateway()
+        public void ShowErrorState(string errorText)
         {
-            if (isDisposing || trayIcon == null) return;
-
             try
             {
-                if (string.IsNullOrEmpty(gatewayIP))
-                {
-                    DetectGateway();
-                    if (string.IsNullOrEmpty(gatewayIP))
-                    {
-                        ShowErrorState("GW!");
-                        return;
-                    }
-                }
-
-                using (Ping ping = new Ping())
-                {
-                    PingReply reply = await ping.SendPingAsync(gatewayIP, PING_TIMEOUT);
-                    if (!isDisposing && trayIcon != null)
-                    {
-                        if (reply.Status == IPStatus.Success)
-                        {
-                            Icon newIcon = CreateNumberIcon(reply.RoundtripTime.ToString());
-                            Icon oldIcon = trayIcon.Icon;
-                            trayIcon.Icon = newIcon;
-                            if (oldIcon != null && oldIcon != newIcon)
-                            {
-                                oldIcon.Dispose();
-                            }
-
-                            trayIcon.Text = $"Built: {BuildTimestamp}\nPinging: {gatewayIP}\nLatency: {reply.RoundtripTime}ms";
-                        }
-                        else
-                        {
-                            Icon newIcon = CreateNumberIcon("X", true);
-                            Icon oldIcon = trayIcon.Icon;
-                            trayIcon.Icon = newIcon;
-                            if (oldIcon != null && oldIcon != newIcon)
-                            {
-                                oldIcon.Dispose();
-                            }
-                            trayIcon.Text = $"Built: {BuildTimestamp}\nFailed to ping {gatewayIP}";
-                        }
-                    }
-                }
+                string tooltipText = $"Error: {errorText}";
+                UpdateTrayIcon(errorText, tooltipText, true);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                if (!isDisposing && trayIcon != null)
-                {
-                    Icon newIcon = CreateNumberIcon("!", true);
-                    Icon oldIcon = trayIcon.Icon;
-                    trayIcon.Icon = newIcon;
-                    if (oldIcon != null && oldIcon != newIcon)
-                    {
-                        oldIcon.Dispose();
-                    }
-                    trayIcon.Text = $"Built: {BuildTimestamp}\nNetwork error occurred";
-                }
+                LogToFile($"Error state display failed: {ex.Message}");
             }
         }
+
+        #endregion
+
+        #region Logging
+
+        private static void LogToFile(string message)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(LogPath);
+                if (!Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                File.AppendAllText(LogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}: {message}\n");
+            }
+            catch { /* Ignore logging errors */ }
+        }
+
+        #endregion
+
+        #region Cleanup and Event Handlers
 
         private void OnQuit(object sender, EventArgs e)
         {
@@ -360,10 +479,12 @@ namespace ping_applet
                     pingTimer = null;
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore disposal errors
+                LogToFile($"Cleanup error: {ex.Message}");
             }
         }
+
+        #endregion
     }
 }

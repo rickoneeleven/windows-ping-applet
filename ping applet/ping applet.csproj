@@ -51,6 +51,7 @@
     <Compile Include="Core\Interfaces\ILoggingService.cs" />
     <Compile Include="Core\Interfaces\INetworkMonitor.cs" />
     <Compile Include="Core\Interfaces\IPingService.cs" />
+    <Compile Include="Core\Interfaces\LoggingService.cs" />
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>

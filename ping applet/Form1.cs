@@ -15,6 +15,7 @@ namespace ping_applet
     {
         private readonly INetworkMonitor networkMonitor;
         private readonly IPingService pingService;
+        private readonly ILoggingService loggingService;
         private NotifyIcon trayIcon;
         private ContextMenuStrip contextMenu;
         private volatile bool isDisposing = false;
@@ -36,6 +37,8 @@ namespace ping_applet
             try
             {
                 InitializeComponent();
+                loggingService = new LoggingService(LogPath);
+                loggingService.LogInfo("Application starting up");
                 networkMonitor = new NetworkMonitor();
                 pingService = new PingService();
                 InitializeCustomComponents();
@@ -125,18 +128,24 @@ namespace ping_applet
             }
             catch (Exception ex)
             {
-                LogToFile($"Async initialization error: {ex.Message}");
+                loggingService.LogError("Async initialization error", ex);
                 ShowErrorState("INIT!");
             }
         }
 
         private void HandleInitializationError(Exception ex)
         {
-            LogToFile($"Initialization error: {ex.Message}");
-            MessageBox.Show($"Failed to initialize the application: {ex.Message}",
-                "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            isDisposing = true;
-            Application.Exit();
+            try
+            {
+                loggingService?.LogError("Initialization error", ex);
+                MessageBox.Show($"Failed to initialize the application: {ex.Message}",
+                    "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                isDisposing = true;
+                Application.Exit();
+            }
         }
 
         #endregion
@@ -148,11 +157,11 @@ namespace ping_applet
             if (string.IsNullOrEmpty(newGateway))
             {
                 ShowErrorState("GW?");
-                LogToFile("Gateway became unavailable");
+                loggingService.LogInfo("Gateway became unavailable");
             }
             else
             {
-                LogToFile($"Gateway changed to: {newGateway}");
+                loggingService.LogInfo($"Gateway changed to: {newGateway}");
                 await pingService.SendPingAsync(newGateway, PING_TIMEOUT);
             }
         }
@@ -161,7 +170,7 @@ namespace ping_applet
         {
             if (!isAvailable)
             {
-                LogToFile("Network became unavailable");
+                loggingService.LogInfo("Network became unavailable");
                 ShowErrorState("OFF");
             }
         }
@@ -181,23 +190,25 @@ namespace ping_applet
                     string displayText = reply.RoundtripTime.ToString();
                     string tooltipText = $"{networkMonitor.CurrentGateway}: {reply.RoundtripTime}ms";
                     UpdateTrayIcon(displayText, tooltipText);
+                    loggingService.LogInfo($"Ping successful - Gateway: {networkMonitor.CurrentGateway}, Time: {reply.RoundtripTime}ms");
                 }
                 else
                 {
                     string tooltipText = $"{networkMonitor.CurrentGateway}: Failed";
                     UpdateTrayIcon("X", tooltipText, true);
+                    loggingService.LogInfo($"Ping failed - Gateway: {networkMonitor.CurrentGateway}, Status: {reply.Status}");
                 }
             }
             catch (Exception ex)
             {
-                LogToFile($"Error handling ping reply: {ex.Message}");
+                loggingService.LogError("Error handling ping reply", ex);
             }
         }
 
         private void PingService_PingError(object sender, Exception ex)
         {
             if (isDisposing) return;
-            LogToFile($"Ping error: {ex.Message}");
+            loggingService.LogError("Ping error", ex);
             ShowErrorState("!");
         }
 
@@ -220,7 +231,7 @@ namespace ping_applet
             }
             catch (Exception ex)
             {
-                LogToFile($"Failed to update context menu: {ex.Message}");
+                loggingService.LogError("Failed to update context menu", ex);
             }
         }
 
@@ -246,7 +257,7 @@ namespace ping_applet
             }
             catch (Exception ex)
             {
-                LogToFile($"Failed to update tray icon: {ex.Message}");
+                loggingService.LogError("Failed to update tray icon", ex);
                 newIcon?.Dispose();
             }
         }
@@ -292,7 +303,7 @@ namespace ping_applet
             }
             catch (Exception ex)
             {
-                LogToFile($"Icon creation error: {ex.Message}");
+                loggingService.LogError("Icon creation error", ex);
                 return (Icon)SystemIcons.Error.Clone();
             }
             finally
@@ -305,7 +316,7 @@ namespace ping_applet
                     }
                     catch (Exception ex)
                     {
-                        LogToFile($"Failed to destroy icon handle: {ex.Message}");
+                        loggingService.LogError("Failed to destroy icon handle", ex);
                     }
                 }
             }
@@ -323,27 +334,8 @@ namespace ping_applet
             }
             catch (Exception ex)
             {
-                LogToFile($"Error state display failed: {ex.Message}");
+                loggingService.LogError("Error state display failed", ex);
             }
-        }
-
-        #endregion
-
-        #region Logging
-
-        private static void LogToFile(string message)
-        {
-            try
-            {
-                string directory = Path.GetDirectoryName(LogPath);
-                if (!Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                File.AppendAllText(LogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}: {message}\n");
-            }
-            catch { /* Ignore logging errors */ }
         }
 
         #endregion
@@ -374,10 +366,12 @@ namespace ping_applet
                 }
                 pingService?.Dispose();
                 networkMonitor?.Dispose();
+                loggingService?.Dispose();
             }
             catch (Exception ex)
             {
-                LogToFile($"Cleanup error: {ex.Message}");
+                // At this point, logging service might be disposed, so we can't use it
+                System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}");
             }
         }
 

@@ -6,15 +6,17 @@ using System.Threading.Tasks;
 using System.Linq;
 using System.IO;
 using System.Reflection;
+using ping_applet.Core.Interfaces;
+using ping_applet.Services;
 
 namespace ping_applet
 {
     public partial class Form1 : Form
     {
+        private readonly INetworkMonitor networkMonitor;
         private NotifyIcon trayIcon;
         private ContextMenuStrip contextMenu;
         private System.Windows.Forms.Timer pingTimer;
-        private string gatewayIP;
         private volatile bool isDisposing = false;
         private volatile bool isPinging = false;
         private readonly object pingLock = new object();
@@ -36,10 +38,10 @@ namespace ping_applet
             try
             {
                 InitializeComponent();
+                networkMonitor = new NetworkMonitor();
                 InitializeCustomComponents();
                 this.FormClosing += Form1_FormClosing;
-                DetectGateway();
-                StartPingTimer();
+                _ = InitializeAsync(); // Fire and forget, but log any errors
             }
             catch (Exception ex)
             {
@@ -103,6 +105,22 @@ namespace ping_applet
             }
         }
 
+        private async Task InitializeAsync()
+        {
+            try
+            {
+                await networkMonitor.InitializeAsync();
+                networkMonitor.GatewayChanged += NetworkMonitor_GatewayChanged;
+                networkMonitor.NetworkAvailabilityChanged += NetworkMonitor_NetworkAvailabilityChanged;
+                StartPingTimer();
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"Async initialization error: {ex.Message}");
+                ShowErrorState("INIT!");
+            }
+        }
+
         private void HandleInitializationError(Exception ex)
         {
             LogToFile($"Initialization error: {ex.Message}");
@@ -114,105 +132,27 @@ namespace ping_applet
 
         #endregion
 
-        #region Network Detection and Monitoring
+        #region Network Event Handlers
 
-        private string GetDefaultGateway()
+        private void NetworkMonitor_GatewayChanged(object sender, string newGateway)
         {
-            try
+            if (string.IsNullOrEmpty(newGateway))
             {
-                NetworkInterface[] interfaces = NetworkInterface.GetAllNetworkInterfaces();
-
-                var activeInterfaces = interfaces.Where(ni =>
-                    ni.OperationalStatus == OperationalStatus.Up &&
-                    ni.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
-                    ni.Supports(NetworkInterfaceComponent.IPv4) &&
-                    ni.GetIPProperties().GatewayAddresses.Count > 0);
-
-                foreach (var activeInterface in activeInterfaces)
-                {
-                    var gateway = activeInterface.GetIPProperties()
-                        .GatewayAddresses
-                        .FirstOrDefault(ga =>
-                            ga?.Address != null &&
-                            !ga.Address.Equals(System.Net.IPAddress.Parse("0.0.0.0")))
-                        ?.Address.ToString();
-
-                    if (!string.IsNullOrEmpty(gateway))
-                    {
-                        LogToFile($"Gateway detected: {gateway}");
-                        return gateway;
-                    }
-                }
-
-                LogToFile("No valid gateway found");
-                if (string.IsNullOrEmpty(gatewayIP))
-                {
-                    ShowErrorState("GW?");
-                }
-                return null;
+                ShowErrorState("GW?");
+                LogToFile("Gateway became unavailable");
             }
-            catch (Exception ex)
+            else
             {
-                LogToFile($"Gateway detection error: {ex.Message}");
-                ShowErrorState("GW!");
-                throw new ApplicationException("Failed to detect gateway", ex);
+                LogToFile($"Gateway changed to: {newGateway}");
             }
         }
 
-        private void DetectGateway()
+        private void NetworkMonitor_NetworkAvailabilityChanged(object sender, bool isAvailable)
         {
-            try
+            if (!isAvailable)
             {
-                string detectedGateway = GetDefaultGateway();
-                if (!string.IsNullOrEmpty(detectedGateway))
-                {
-                    gatewayIP = detectedGateway;
-                    SetupNetworkChangeDetection();
-                }
-            }
-            catch (Exception ex)
-            {
-                LogToFile($"Gateway detection failed: {ex.Message}");
-                ShowErrorState("GW!");
-            }
-        }
-
-        private void SetupNetworkChangeDetection()
-        {
-            try
-            {
-                NetworkChange.NetworkAddressChanged += async (s, e) =>
-                {
-                    try
-                    {
-                        string newGateway = GetDefaultGateway();
-                        if (!string.IsNullOrEmpty(newGateway))
-                        {
-                            gatewayIP = newGateway;
-                            LogToFile($"Gateway updated to: {newGateway}");
-                        }
-                        await PingGateway(); // Force immediate ping attempt
-                    }
-                    catch (Exception ex)
-                    {
-                        LogToFile($"Network change handling error: {ex.Message}");
-                        ShowErrorState("NET!");
-                    }
-                };
-
-                NetworkChange.NetworkAvailabilityChanged += (s, e) =>
-                {
-                    if (!e.IsAvailable)
-                    {
-                        LogToFile("Network became unavailable");
-                        ShowErrorState("OFF");
-                    }
-                };
-            }
-            catch (Exception ex)
-            {
-                LogToFile($"Network change detection setup failed: {ex.Message}");
-                ShowErrorState("NET!");
+                LogToFile("Network became unavailable");
+                ShowErrorState("OFF");
             }
         }
 
@@ -253,14 +193,11 @@ namespace ping_applet
 
                 LogToFile("Starting ping operation...");
 
-                if (string.IsNullOrEmpty(gatewayIP))
+                string currentGateway = networkMonitor.CurrentGateway;
+                if (string.IsNullOrEmpty(currentGateway))
                 {
-                    DetectGateway();
-                    if (string.IsNullOrEmpty(gatewayIP))
-                    {
-                        ShowErrorState("GW!");
-                        return;
-                    }
+                    ShowErrorState("GW!");
+                    return;
                 }
 
                 using (var ping = new Ping())
@@ -275,8 +212,8 @@ namespace ping_applet
 
                     try
                     {
-                        LogToFile($"Sending ping to {gatewayIP}...");
-                        PingReply reply = await ping.SendPingAsync(gatewayIP, PING_TIMEOUT, buffer, options);
+                        LogToFile($"Sending ping to {currentGateway}...");
+                        PingReply reply = await ping.SendPingAsync(currentGateway, PING_TIMEOUT, buffer, options);
 
                         if (!isDisposing && trayIcon != null)
                         {
@@ -315,12 +252,12 @@ namespace ping_applet
                 if (reply.Status == IPStatus.Success)
                 {
                     string displayText = reply.RoundtripTime.ToString();
-                    string tooltipText = $"{gatewayIP}: {reply.RoundtripTime}ms";
+                    string tooltipText = $"{networkMonitor.CurrentGateway}: {reply.RoundtripTime}ms";
                     UpdateTrayIcon(displayText, tooltipText);
                 }
                 else
                 {
-                    string tooltipText = $"{gatewayIP}: Failed";
+                    string tooltipText = $"{networkMonitor.CurrentGateway}: Failed";
                     UpdateTrayIcon("X", tooltipText, true);
                 }
             }
@@ -340,7 +277,7 @@ namespace ping_applet
                     statusItem.Text = buildInfo;
 
                     statusItem.DropDownItems.Clear();
-                    statusItem.DropDownItems.Add(new ToolStripMenuItem($"Gateway: {gatewayIP}") { Enabled = false });
+                    statusItem.DropDownItems.Add(new ToolStripMenuItem($"Gateway: {networkMonitor.CurrentGateway}") { Enabled = false });
                 }
             }
             catch (Exception ex)
@@ -483,9 +420,9 @@ namespace ping_applet
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
-            isDisposing = true;
             try
             {
+                isDisposing = true;
                 if (trayIcon != null)
                 {
                     trayIcon.Visible = false;
@@ -503,6 +440,7 @@ namespace ping_applet
                     pingTimer.Dispose();
                     pingTimer = null;
                 }
+                networkMonitor?.Dispose();
             }
             catch (Exception ex)
             {

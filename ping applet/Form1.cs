@@ -14,12 +14,10 @@ namespace ping_applet
     public partial class Form1 : Form
     {
         private readonly INetworkMonitor networkMonitor;
+        private readonly IPingService pingService;
         private NotifyIcon trayIcon;
         private ContextMenuStrip contextMenu;
-        private System.Windows.Forms.Timer pingTimer;
         private volatile bool isDisposing = false;
-        private volatile bool isPinging = false;
-        private readonly object pingLock = new object();
 
         private const int PING_INTERVAL = 1000; // 1 second
         private const int PING_TIMEOUT = 1000;  // 1 second timeout
@@ -39,6 +37,7 @@ namespace ping_applet
             {
                 InitializeComponent();
                 networkMonitor = new NetworkMonitor();
+                pingService = new PingService();
                 InitializeCustomComponents();
                 this.FormClosing += Form1_FormClosing;
                 _ = InitializeAsync(); // Fire and forget, but log any errors
@@ -98,6 +97,10 @@ namespace ping_applet
                 ShowInTaskbar = false;
                 WindowState = FormWindowState.Minimized;
                 FormBorderStyle = FormBorderStyle.None;
+
+                // Wire up ping service events
+                pingService.PingCompleted += PingService_PingCompleted;
+                pingService.PingError += PingService_PingError;
             }
             catch (Exception ex)
             {
@@ -112,7 +115,13 @@ namespace ping_applet
                 await networkMonitor.InitializeAsync();
                 networkMonitor.GatewayChanged += NetworkMonitor_GatewayChanged;
                 networkMonitor.NetworkAvailabilityChanged += NetworkMonitor_NetworkAvailabilityChanged;
-                StartPingTimer();
+                pingService.StartPingTimer(PING_INTERVAL);
+
+                // Initial ping to current gateway
+                if (!string.IsNullOrEmpty(networkMonitor.CurrentGateway))
+                {
+                    await pingService.SendPingAsync(networkMonitor.CurrentGateway, PING_TIMEOUT);
+                }
             }
             catch (Exception ex)
             {
@@ -134,7 +143,7 @@ namespace ping_applet
 
         #region Network Event Handlers
 
-        private void NetworkMonitor_GatewayChanged(object sender, string newGateway)
+        private async void NetworkMonitor_GatewayChanged(object sender, string newGateway)
         {
             if (string.IsNullOrEmpty(newGateway))
             {
@@ -144,6 +153,7 @@ namespace ping_applet
             else
             {
                 LogToFile($"Gateway changed to: {newGateway}");
+                await pingService.SendPingAsync(newGateway, PING_TIMEOUT);
             }
         }
 
@@ -158,94 +168,11 @@ namespace ping_applet
 
         #endregion
 
-        #region Ping Operations
+        #region Ping Event Handlers
 
-        private void StartPingTimer()
+        private void PingService_PingCompleted(object sender, PingReply reply)
         {
-            try
-            {
-                pingTimer = new System.Windows.Forms.Timer
-                {
-                    Interval = PING_INTERVAL
-                };
-                pingTimer.Tick += async (sender, e) => await PingGateway();
-                pingTimer.Start();
-            }
-            catch (Exception ex)
-            {
-                LogToFile($"Timer setup failed: {ex.Message}");
-                ShowErrorState("TMR!");
-            }
-        }
-
-        private async Task PingGateway()
-        {
-            if (isDisposing || trayIcon == null) return;
-            if (isPinging) return;
-
-            try
-            {
-                lock (pingLock)
-                {
-                    if (isPinging) return;
-                    isPinging = true;
-                }
-
-                LogToFile("Starting ping operation...");
-
-                string currentGateway = networkMonitor.CurrentGateway;
-                if (string.IsNullOrEmpty(currentGateway))
-                {
-                    ShowErrorState("GW!");
-                    return;
-                }
-
-                using (var ping = new Ping())
-                {
-                    var options = new PingOptions
-                    {
-                        DontFragment = false,
-                        Ttl = 128
-                    };
-
-                    byte[] buffer = new byte[32];
-
-                    try
-                    {
-                        LogToFile($"Sending ping to {currentGateway}...");
-                        PingReply reply = await ping.SendPingAsync(currentGateway, PING_TIMEOUT, buffer, options);
-
-                        if (!isDisposing && trayIcon != null)
-                        {
-                            LogToFile($"Ping completed with status: {reply.Status}");
-                            UpdateIconBasedOnReply(reply);
-                        }
-                    }
-                    catch (PingException pex)
-                    {
-                        LogToFile($"Ping exception: {pex.Message}");
-                        ShowErrorState("!");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                LogToFile($"General ping error: {ex.Message}");
-                ShowErrorState("!");
-            }
-            finally
-            {
-                isPinging = false;
-            }
-        }
-
-        #endregion
-
-        #region UI Updates
-
-        private void UpdateIconBasedOnReply(PingReply reply)
-        {
-            if (reply == null) return;
+            if (isDisposing || reply == null) return;
 
             try
             {
@@ -263,9 +190,20 @@ namespace ping_applet
             }
             catch (Exception ex)
             {
-                LogToFile($"Icon update error: {ex.Message}");
+                LogToFile($"Error handling ping reply: {ex.Message}");
             }
         }
+
+        private void PingService_PingError(object sender, Exception ex)
+        {
+            if (isDisposing) return;
+            LogToFile($"Ping error: {ex.Message}");
+            ShowErrorState("!");
+        }
+
+        #endregion
+
+        #region UI Updates
 
         private void UpdateContextMenuStatus()
         {
@@ -434,12 +372,7 @@ namespace ping_applet
                     contextMenu.Dispose();
                     contextMenu = null;
                 }
-                if (pingTimer != null)
-                {
-                    pingTimer.Stop();
-                    pingTimer.Dispose();
-                    pingTimer = null;
-                }
+                pingService?.Dispose();
                 networkMonitor?.Dispose();
             }
             catch (Exception ex)

@@ -75,20 +75,34 @@ namespace ping_applet
         {
             try
             {
-                // If we can still access the form, update the icon
-                if (mainForm != null && !mainForm.IsDisposed)
-                {
-                    mainForm.ShowErrorState("ERR");
-                }
-
                 // Log the error (you could add file logging here if needed)
                 Console.WriteLine($"Fatal error occurred: {ex}");
+
+                // Show error message to user
+                MessageBox.Show(
+                    "A fatal error occurred. The application will restart in 5 seconds.",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
             }
             catch
             {
                 // If we can't handle the error gracefully, at least try to show a message
-                MessageBox.Show("A fatal error occurred. The application will restart in 5 seconds.",
-                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                try
+                {
+                    MessageBox.Show(
+                        "A fatal error occurred. The application will restart.",
+                        "Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                }
+                catch
+                {
+                    // At this point, we can't even show a message box
+                    // Nothing more we can do
+                }
             }
         }
     }

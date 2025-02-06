@@ -1,19 +1,17 @@
 ﻿using System;
 using System.IO;
-using System.Linq;
-using System.Reflection;
 using System.Windows.Forms;
 using ping_applet.Controllers;
-using ping_applet.Core.Interfaces;
 using ping_applet.Services;
 using ping_applet.UI;
+using ping_applet.Utils;
 
 namespace ping_applet
 {
     public partial class Form1 : Form
     {
         private AppController appController;
-        private static readonly string BuildTimestamp = GetBuildDate();
+        private readonly BuildInfoProvider buildInfoProvider;
         private static readonly string LogPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PingApplet",
@@ -25,6 +23,7 @@ namespace ping_applet
             try
             {
                 InitializeComponent();
+                buildInfoProvider = new BuildInfoProvider();
                 InitializeApplication();
             }
             catch (Exception ex)
@@ -39,7 +38,7 @@ namespace ping_applet
             var loggingService = new LoggingService(LogPath);
             var networkMonitor = new NetworkMonitor();
             var pingService = new PingService();
-            var trayIconManager = new TrayIconManager(BuildTimestamp);
+            var trayIconManager = new TrayIconManager(buildInfoProvider);
 
             // Create and initialize controller
             appController = new AppController(networkMonitor, pingService, loggingService, trayIconManager);
@@ -58,23 +57,6 @@ namespace ping_applet
             WindowState = FormWindowState.Minimized;
             FormBorderStyle = FormBorderStyle.None;
             FormClosing += Form1_FormClosing;
-        }
-
-        private static string GetBuildDate()
-        {
-            try
-            {
-                var assembly = Assembly.GetExecutingAssembly();
-                var attribute = assembly.GetCustomAttributes(typeof(AssemblyMetadataAttribute), false)
-                    .Cast<AssemblyMetadataAttribute>()
-                    .FirstOrDefault(attr => attr.Key == "BuildTimestamp");
-
-                return attribute?.Value ?? "Unknown";
-            }
-            catch
-            {
-                return "Unknown";
-            }
         }
 
         private void HandleInitializationError(Exception ex)

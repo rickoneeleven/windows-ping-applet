@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
+using ping_applet.Utils;
 
 namespace ping_applet.UI
 {
@@ -12,7 +13,7 @@ namespace ping_applet.UI
         private readonly NotifyIcon trayIcon;
         private readonly ContextMenuStrip contextMenu;
         private readonly IconGenerator iconGenerator;
-        private readonly string buildTimestamp;
+        private readonly BuildInfoProvider buildInfoProvider;
         private bool isDisposed;
 
         /// <summary>
@@ -25,9 +26,9 @@ namespace ping_applet.UI
         /// </summary>
         public bool IsDisposed => isDisposed;
 
-        public TrayIconManager(string buildTimestamp)
+        public TrayIconManager(BuildInfoProvider buildInfoProvider)
         {
-            this.buildTimestamp = buildTimestamp ?? "Unknown";
+            this.buildInfoProvider = buildInfoProvider ?? throw new ArgumentNullException(nameof(buildInfoProvider));
             iconGenerator = new IconGenerator();
 
             // Initialize context menu
@@ -46,7 +47,7 @@ namespace ping_applet.UI
 
         private void InitializeContextMenu()
         {
-            // Add status item that will show build info and gateway details
+            // Add status item that will show version info
             var statusItem = new ToolStripMenuItem("Status")
             {
                 Enabled = false
@@ -94,11 +95,11 @@ namespace ping_applet.UI
 
             if (contextMenu?.Items.Count > 0 && contextMenu.Items[0] is ToolStripMenuItem statusItem)
             {
-                string buildInfo = $"Build: {buildTimestamp}";
-                statusItem.Text = buildInfo;
+                statusItem.Text = $"Version {buildInfoProvider.VersionString}";
 
                 statusItem.DropDownItems.Clear();
-                // Status items are managed by context menu opening event
+                var buildItem = new ToolStripMenuItem($"Built on {buildInfoProvider.BuildTimestamp}") { Enabled = false };
+                statusItem.DropDownItems.Add(buildItem);
             }
         }
 

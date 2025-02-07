@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using ping_applet.Controllers;
 using ping_applet.Services;
@@ -12,6 +13,8 @@ namespace ping_applet
     {
         private AppController appController;
         private readonly BuildInfoProvider buildInfoProvider;
+        private bool isDisposed;
+
         private static readonly string LogPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PingApplet",
@@ -24,7 +27,8 @@ namespace ping_applet
             {
                 InitializeComponent();
                 buildInfoProvider = new BuildInfoProvider();
-                InitializeApplication();
+                ConfigureForm();
+                _ = InitializeApplicationAsync();
             }
             catch (Exception ex)
             {
@@ -32,31 +36,68 @@ namespace ping_applet
             }
         }
 
-        private void InitializeApplication()
-        {
-            // Create core services
-            var loggingService = new LoggingService(LogPath);
-            var networkMonitor = new NetworkMonitor();
-            var pingService = new PingService();
-            var trayIconManager = new TrayIconManager(buildInfoProvider);
-
-            // Create and initialize controller
-            appController = new AppController(networkMonitor, pingService, loggingService, trayIconManager);
-            appController.ApplicationExit += (s, e) => Application.Exit();
-
-            // Configure form
-            ConfigureForm();
-
-            // Start the application
-            _ = appController.InitializeAsync();
-        }
-
         private void ConfigureForm()
         {
             ShowInTaskbar = false;
             WindowState = FormWindowState.Minimized;
             FormBorderStyle = FormBorderStyle.None;
+
             FormClosing += MainForm_FormClosing;
+            Load += MainForm_Load;
+        }
+
+        private async Task InitializeApplicationAsync()
+        {
+            try
+            {
+                var loggingService = new LoggingService(LogPath);
+                var networkMonitor = new NetworkMonitor();
+                var pingService = new PingService();
+                var trayIconManager = new TrayIconManager(buildInfoProvider);
+
+                appController = new AppController(networkMonitor, pingService, loggingService, trayIconManager);
+                appController.ApplicationExit += AppController_ApplicationExit;
+
+                await appController.InitializeAsync();
+            }
+            catch (Exception ex)
+            {
+                HandleInitializationError(ex);
+            }
+        }
+
+        private void AppController_ApplicationExit(object sender, EventArgs e)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => Application.Exit()));
+            }
+            else
+            {
+                Application.Exit();
+            }
+        }
+
+        private void MainForm_Load(object sender, EventArgs e)
+        {
+            Hide();
+        }
+
+        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            try
+            {
+                if (appController != null)
+                {
+                    appController.ApplicationExit -= AppController_ApplicationExit;
+                    appController.Dispose();
+                    appController = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                HandleCleanupError(ex);
+            }
         }
 
         private void HandleInitializationError(Exception ex)
@@ -70,9 +111,36 @@ namespace ping_applet
             Application.Exit();
         }
 
-        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
+        private void HandleCleanupError(Exception ex)
         {
-            appController?.Dispose();
+            MessageBox.Show(
+                $"Error during cleanup: {ex.Message}",
+                "Cleanup Error",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
+            );
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (!isDisposed)
+            {
+                if (disposing)
+                {
+                    if (appController != null)
+                    {
+                        appController.ApplicationExit -= AppController_ApplicationExit;
+                        appController.Dispose();
+                        appController = null;
+                    }
+                    if (components != null)
+                    {
+                        components.Dispose();
+                    }
+                }
+                isDisposed = true;
+                base.Dispose(disposing);
+            }
         }
     }
 }

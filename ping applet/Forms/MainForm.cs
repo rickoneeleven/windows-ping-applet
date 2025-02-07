@@ -8,7 +8,7 @@ using ping_applet.Utils;
 
 namespace ping_applet
 {
-    public partial class Form1 : Form
+    public partial class MainForm : Form
     {
         private AppController appController;
         private readonly BuildInfoProvider buildInfoProvider;
@@ -18,7 +18,7 @@ namespace ping_applet
             "ping.log"
         );
 
-        public Form1()
+        public MainForm()
         {
             try
             {
@@ -56,7 +56,7 @@ namespace ping_applet
             ShowInTaskbar = false;
             WindowState = FormWindowState.Minimized;
             FormBorderStyle = FormBorderStyle.None;
-            FormClosing += Form1_FormClosing;
+            FormClosing += MainForm_FormClosing;
         }
 
         private void HandleInitializationError(Exception ex)
@@ -70,7 +70,7 @@ namespace ping_applet
             Application.Exit();
         }
 
-        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
             appController?.Dispose();
         }

@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Threading;
 
@@ -7,7 +6,7 @@ namespace ping_applet
 {
     internal static class Program
     {
-        private static Form1 mainForm;
+        private static MainForm mainForm;
         private static readonly int RestartDelay = 5000; // 5 seconds
 
         [STAThread]
@@ -31,7 +30,7 @@ namespace ping_applet
             {
                 try
                 {
-                    mainForm = new Form1();
+                    mainForm = new MainForm();
                     Application.Run(mainForm);
 
                     // If we get here normally (via Quit), exit the application

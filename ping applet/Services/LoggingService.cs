@@ -1,5 +1,7 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
+using System.Text;
 using ping_applet.Core.Interfaces;
 
 namespace ping_applet.Services
@@ -8,12 +10,16 @@ namespace ping_applet.Services
     {
         private bool isDisposed;
         private readonly object logLock = new object();
+        private const int DEFAULT_MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB in bytes
+        private const int RETENTION_BUFFER = 1 * 1024 * 1024; // 1MB buffer for retained logs
 
         public string LogPath { get; set; }
+        public long MaxLogSizeBytes { get; set; }
 
         public LoggingService(string logPath)
         {
             LogPath = logPath ?? throw new ArgumentNullException(nameof(logPath));
+            MaxLogSizeBytes = DEFAULT_MAX_LOG_SIZE;
             Initialize();
         }
 
@@ -89,14 +95,52 @@ namespace ping_applet.Services
                 lock (logLock)
                 {
                     File.AppendAllText(LogPath, formattedMessage + Environment.NewLine);
+                    RotateLogIfNeeded();
                 }
             }
             catch (Exception ex)
             {
-                // Output to debug to help diagnose issues
                 System.Diagnostics.Debug.WriteLine($"Failed to write to log file: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine($"Attempted to write to: {LogPath}");
-                // Still suppress the exception to prevent cascading failures
+            }
+        }
+
+        public bool RotateLogIfNeeded()
+        {
+            try
+            {
+                var fileInfo = new FileInfo(LogPath);
+                if (!fileInfo.Exists || fileInfo.Length < MaxLogSizeBytes)
+                {
+                    return false;
+                }
+
+                // Read all content
+                string[] allLines;
+                lock (logLock)
+                {
+                    allLines = File.ReadAllLines(LogPath);
+                }
+
+                // Calculate approximately how many lines we need to keep
+                long totalSize = allLines.Sum(line => Encoding.UTF8.GetByteCount(line + Environment.NewLine));
+                int linesToKeep = (int)(allLines.Length * (MaxLogSizeBytes - RETENTION_BUFFER) / totalSize);
+
+                // Keep the most recent lines
+                string[] newContent = allLines.Skip(Math.Max(0, allLines.Length - linesToKeep)).ToArray();
+
+                // Write back the truncated content
+                lock (logLock)
+                {
+                    File.WriteAllLines(LogPath, newContent);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to rotate log file: {ex.Message}");
+                return false;
             }
         }
 
@@ -104,7 +148,6 @@ namespace ping_applet.Services
         {
             if (!isDisposed && disposing)
             {
-                // Nothing to dispose here, but we'll set the flag
                 isDisposed = true;
             }
         }

@@ -3,7 +3,7 @@
 namespace ping_applet.Core.Interfaces
 {
     /// <summary>
-    /// Interface for handling application logging
+    /// Interface for handling application logging with size management
     /// </summary>
     public interface ILoggingService : IDisposable
     {
@@ -11,6 +11,11 @@ namespace ping_applet.Core.Interfaces
         /// Gets or sets the path where log files will be stored
         /// </summary>
         string LogPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum size of the log file in bytes
+        /// </summary>
+        long MaxLogSizeBytes { get; set; }
 
         /// <summary>
         /// Logs an informational message with timestamp
@@ -29,5 +34,11 @@ namespace ping_applet.Core.Interfaces
         /// Initializes the logging service, creating necessary directories
         /// </summary>
         void Initialize();
+
+        /// <summary>
+        /// Performs log rotation if the file size exceeds the maximum limit
+        /// </summary>
+        /// <returns>True if rotation was performed, false otherwise</returns>
+        bool RotateLogIfNeeded();
     }
 }

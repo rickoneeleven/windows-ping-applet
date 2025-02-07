@@ -52,7 +52,6 @@
     <Compile Include="Core\Interfaces\ILoggingService.cs" />
     <Compile Include="Core\Interfaces\INetworkMonitor.cs" />
     <Compile Include="Core\Interfaces\IPingService.cs" />
-    <Compile Include="Core\Interfaces\LoggingService.cs" />
     <Compile Include="Forms\MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -61,6 +60,7 @@
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Services\LoggingService.cs" />
     <Compile Include="Services\NetworkMonitor.cs" />
     <Compile Include="Services\PingService.cs" />
     <Compile Include="UI\IconGenerator.cs" />

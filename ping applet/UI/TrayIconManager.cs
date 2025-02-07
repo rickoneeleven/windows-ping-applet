@@ -1,13 +1,12 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 using ping_applet.Utils;
 
 namespace ping_applet.UI
 {
-    /// <summary>
-    /// Manages the system tray icon and its context menu
-    /// </summary>
     public class TrayIconManager : IDisposable
     {
         private readonly NotifyIcon trayIcon;
@@ -15,21 +14,22 @@ namespace ping_applet.UI
         private readonly IconGenerator iconGenerator;
         private readonly BuildInfoProvider buildInfoProvider;
         private bool isDisposed;
+        private readonly string logPath;
 
-        /// <summary>
-        /// Event raised when the user requests to quit the application
-        /// </summary>
         public event EventHandler QuitRequested;
-
-        /// <summary>
-        /// Gets whether this instance has been disposed
-        /// </summary>
         public bool IsDisposed => isDisposed;
 
         public TrayIconManager(BuildInfoProvider buildInfoProvider)
         {
             this.buildInfoProvider = buildInfoProvider ?? throw new ArgumentNullException(nameof(buildInfoProvider));
             iconGenerator = new IconGenerator();
+
+            // Initialize log path
+            logPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "PingApplet",
+                "ping.log"
+            );
 
             // Initialize context menu
             contextMenu = new ContextMenuStrip();
@@ -54,11 +54,52 @@ namespace ping_applet.UI
             };
             contextMenu.Items.Add(statusItem);
             contextMenu.Items.Add(new ToolStripSeparator());
+
+            // Add View Logs option
+            var viewLogsItem = new ToolStripMenuItem("View Log");
+            viewLogsItem.Click += ViewLogs_Click;
+            contextMenu.Items.Add(viewLogsItem);
+
+            contextMenu.Items.Add(new ToolStripSeparator());
+
             var quitItem = new ToolStripMenuItem("Quit");
             quitItem.Click += (s, e) => QuitRequested?.Invoke(this, EventArgs.Empty);
             contextMenu.Items.Add(quitItem);
 
             contextMenu.Opening += (s, e) => UpdateStatus();
+        }
+
+        private void ViewLogs_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (!File.Exists(logPath))
+                {
+                    MessageBox.Show(
+                        "Log file not found. The application may not have generated any logs yet.",
+                        "Log File Not Found",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                    return;
+                }
+
+                // Open log file with default text editor
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = logPath,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Failed to open log file: {ex.Message}",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
         }
 
         public void UpdateIcon(string displayText, string tooltipText, bool isError = false)
@@ -86,9 +127,6 @@ namespace ping_applet.UI
             }
         }
 
-        /// <summary>
-        /// Updates the status information shown in the context menu
-        /// </summary>
         public void UpdateStatus()
         {
             if (isDisposed) return;
@@ -100,6 +138,8 @@ namespace ping_applet.UI
                 statusItem.DropDownItems.Clear();
                 var buildItem = new ToolStripMenuItem($"Built on {buildInfoProvider.BuildTimestamp}") { Enabled = false };
                 statusItem.DropDownItems.Add(buildItem);
+
+                // No tooltip needed as it causes flickering with frequent updates
             }
         }
 

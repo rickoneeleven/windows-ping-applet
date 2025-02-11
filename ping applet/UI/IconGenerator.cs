@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 namespace ping_applet.UI
 {
     /// <summary>
-    /// Handles the creation and management of system tray icons
+    /// Handles the creation and management of system tray icons with support for transition states
     /// </summary>
     public class IconGenerator : IDisposable
     {
@@ -21,28 +21,46 @@ namespace ping_applet.UI
         // Icon dimensions
         private const int ICON_SIZE = 16;
 
+        // Colors
+        private static readonly Color ERROR_COLOR = Color.Red;
+        private static readonly Color NORMAL_COLOR = Color.Black;
+        private static readonly Color TRANSITION_COLOR = Color.FromArgb(255, 165, 0); // Orange
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool DestroyIcon(IntPtr hIcon);
 
         /// <summary>
-        /// Creates an icon with the specified number or text
+        /// Creates an icon with the specified number or text in normal or error state
         /// </summary>
-        /// <param name="text">The text to display in the icon</param>
-        /// <param name="isError">Whether to use error styling (red background)</param>
-        /// <returns>An Icon object containing the generated icon</returns>
         public Icon CreateNumberIcon(string text, bool isError = false)
         {
             if (isDisposed)
                 throw new ObjectDisposedException(nameof(IconGenerator));
 
+            return CreateIconWithColor(text, isError ? ERROR_COLOR : NORMAL_COLOR);
+        }
+
+        /// <summary>
+        /// Creates an icon with the specified number or text in transition state (orange)
+        /// </summary>
+        public Icon CreateTransitionIcon(string text)
+        {
+            if (isDisposed)
+                throw new ObjectDisposedException(nameof(IconGenerator));
+
+            return CreateIconWithColor(text, TRANSITION_COLOR);
+        }
+
+        private Icon CreateIconWithColor(string text, Color backgroundColor)
+        {
             IntPtr hIcon = IntPtr.Zero;
             try
             {
                 using (var bitmap = new Bitmap(ICON_SIZE, ICON_SIZE))
                 using (var g = Graphics.FromImage(bitmap))
                 {
-                    // Set background color based on state
-                    g.Clear(isError ? Color.Red : Color.Black);
+                    // Set background color
+                    g.Clear(backgroundColor);
 
                     // Determine font size based on text length
                     float fontSize = text.Length switch
@@ -53,7 +71,10 @@ namespace ping_applet.UI
                         _ => DEFAULT_FONT_SIZE
                     };
 
-                    // Configure text rendering
+                    // Configure text rendering for maximum clarity
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+                    // Configure and draw text
                     using (var font = new Font(FONT_FAMILY, fontSize, FontStyle.Bold))
                     using (var brush = new SolidBrush(Color.White))
                     using (var sf = new StringFormat
@@ -62,7 +83,15 @@ namespace ping_applet.UI
                         LineAlignment = StringAlignment.Center
                     })
                     {
-                        g.DrawString(text, font, brush, new RectangleF(0, 0, ICON_SIZE, ICON_SIZE), sf);
+                        var rect = new RectangleF(0, 0, ICON_SIZE, ICON_SIZE);
+
+                        // Draw text with slight offset for better visibility
+                        if (text.Length <= 2)
+                        {
+                            rect.Offset(0, -1);
+                        }
+
+                        g.DrawString(text, font, brush, rect, sf);
                     }
 
                     hIcon = bitmap.GetHicon();

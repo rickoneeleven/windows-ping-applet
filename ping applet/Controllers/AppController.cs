@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Net.NetworkInformation;
 using System.Threading.Tasks;
+using System.Timers;
 using ping_applet.Core.Interfaces;
+using ping_applet.Services;
 using ping_applet.UI;
 
 namespace ping_applet.Controllers
@@ -15,10 +17,14 @@ namespace ping_applet.Controllers
         private readonly IPingService pingService;
         private readonly ILoggingService loggingService;
         private readonly TrayIconManager trayIconManager;
+        private readonly NetworkStateManager networkStateManager;
+        private readonly Timer bssidResetTimer;
         private bool isDisposed;
+        private bool isInBssidTransition;
 
         private const int PING_INTERVAL = 1000; // 1 second
         private const int PING_TIMEOUT = 1000;  // 1 second timeout
+        private const int BSSID_TRANSITION_WINDOW = 10000; // 10 seconds
 
         public event EventHandler ApplicationExit;
 
@@ -33,12 +39,21 @@ namespace ping_applet.Controllers
             this.loggingService = loggingService ?? throw new ArgumentNullException(nameof(loggingService));
             this.trayIconManager = trayIconManager ?? throw new ArgumentNullException(nameof(trayIconManager));
 
+            // Initialize NetworkStateManager
+            this.networkStateManager = new NetworkStateManager(loggingService);
+
+            // Initialize BSSID transition timer
+            this.bssidResetTimer = new Timer(BSSID_TRANSITION_WINDOW);
+            this.bssidResetTimer.AutoReset = false;
+            this.bssidResetTimer.Elapsed += BssidResetTimer_Elapsed;
+
             // Wire up events
             this.networkMonitor.GatewayChanged += NetworkMonitor_GatewayChanged;
             this.networkMonitor.NetworkAvailabilityChanged += NetworkMonitor_NetworkAvailabilityChanged;
             this.pingService.PingCompleted += PingService_PingCompleted;
             this.pingService.PingError += PingService_PingError;
             this.trayIconManager.QuitRequested += (s, e) => ApplicationExit?.Invoke(this, EventArgs.Empty);
+            this.networkStateManager.BssidChanged += NetworkStateManager_BssidChanged;
         }
 
         public async Task InitializeAsync()
@@ -47,6 +62,7 @@ namespace ping_applet.Controllers
             {
                 loggingService.LogInfo("Application starting up");
                 await networkMonitor.InitializeAsync();
+                await networkStateManager.StartMonitoring();
                 pingService.StartPingTimer(PING_INTERVAL);
 
                 // Initial ping to current gateway
@@ -60,6 +76,45 @@ namespace ping_applet.Controllers
                 loggingService.LogError("Initialization error", ex);
                 ShowErrorState("INIT!");
                 throw;
+            }
+        }
+
+        private void NetworkStateManager_BssidChanged(object sender, string newBssid)
+        {
+            try
+            {
+                isInBssidTransition = true;
+                bssidResetTimer.Stop();
+                bssidResetTimer.Start();
+
+                // Update UI to show orange state
+                string displayText = "AP";
+                string tooltipText = $"Access Point Change - New BSSID: {newBssid}";
+                UpdateTrayIcon(displayText, tooltipText, isTransition: true);
+
+                loggingService.LogInfo($"BSSID transition started - New BSSID: {newBssid}");
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error handling BSSID change", ex);
+            }
+        }
+
+        private void BssidResetTimer_Elapsed(object sender, ElapsedEventArgs e)
+        {
+            try
+            {
+                isInBssidTransition = false;
+                // Force a ping to update the display
+                if (!string.IsNullOrEmpty(networkMonitor.CurrentGateway))
+                {
+                    _ = pingService.SendPingAsync(networkMonitor.CurrentGateway, PING_TIMEOUT);
+                }
+                loggingService.LogInfo("BSSID transition window ended");
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error handling BSSID reset", ex);
             }
         }
 
@@ -93,6 +148,12 @@ namespace ping_applet.Controllers
 
             try
             {
+                if (isInBssidTransition)
+                {
+                    // Don't update the icon during BSSID transition
+                    return;
+                }
+
                 if (reply.Status == IPStatus.Success)
                 {
                     string displayText = reply.RoundtripTime.ToString();
@@ -120,11 +181,12 @@ namespace ping_applet.Controllers
             ShowErrorState("!");
         }
 
-        private void UpdateTrayIcon(string displayText, string tooltipText, bool isError = false)
+        private void UpdateTrayIcon(string displayText, string tooltipText, bool isError = false, bool isTransition = false)
         {
             try
             {
-                trayIconManager.UpdateIcon(displayText, tooltipText, isError);
+                // Add new parameter for transition state (orange color)
+                trayIconManager.UpdateIcon(displayText, tooltipText, isError, isTransition);
             }
             catch (Exception ex)
             {
@@ -149,10 +211,12 @@ namespace ping_applet.Controllers
         {
             if (!isDisposed && disposing)
             {
+                networkStateManager.Dispose();
                 networkMonitor.Dispose();
                 pingService.Dispose();
                 loggingService.Dispose();
                 trayIconManager.Dispose();
+                bssidResetTimer.Dispose();
                 isDisposed = true;
             }
         }

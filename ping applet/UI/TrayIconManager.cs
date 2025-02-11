@@ -16,6 +16,12 @@ namespace ping_applet.UI
         private bool isDisposed;
         private readonly string logPath;
 
+        // UI state tracking
+        private string currentDisplayText;
+        private string currentTooltipText;
+        private bool currentErrorState;
+        private bool currentTransitionState;
+
         public event EventHandler QuitRequested;
         public bool IsDisposed => isDisposed;
 
@@ -31,11 +37,11 @@ namespace ping_applet.UI
                 "ping.log"
             );
 
-            // Initialize context menu
+            // Initialize context menu with enhanced status info
             contextMenu = new ContextMenuStrip();
             InitializeContextMenu();
 
-            // Initialize tray icon
+            // Initialize tray icon with transition state support
             trayIcon = new NotifyIcon
             {
                 Icon = iconGenerator.CreateNumberIcon("--"),
@@ -47,26 +53,89 @@ namespace ping_applet.UI
 
         private void InitializeContextMenu()
         {
-            // Add status item that will show version info
-            var statusItem = new ToolStripMenuItem("Status")
+            try
             {
-                Enabled = false
-            };
-            contextMenu.Items.Add(statusItem);
-            contextMenu.Items.Add(new ToolStripSeparator());
+                // Add enhanced status item that will show version and connection info
+                var statusItem = new ToolStripMenuItem("Status")
+                {
+                    Enabled = false
+                };
+                contextMenu.Items.Add(statusItem);
+                contextMenu.Items.Add(new ToolStripSeparator());
 
-            // Add View Logs option
-            var viewLogsItem = new ToolStripMenuItem("View Log");
-            viewLogsItem.Click += ViewLogs_Click;
-            contextMenu.Items.Add(viewLogsItem);
+                // Add Network State section
+                var networkStateItem = new ToolStripMenuItem("Network State")
+                {
+                    Enabled = false
+                };
+                contextMenu.Items.Add(networkStateItem);
+                contextMenu.Items.Add(new ToolStripSeparator());
 
-            contextMenu.Items.Add(new ToolStripSeparator());
+                // Add View Logs option
+                var viewLogsItem = new ToolStripMenuItem("View Log");
+                viewLogsItem.Click += ViewLogs_Click;
+                contextMenu.Items.Add(viewLogsItem);
 
-            var quitItem = new ToolStripMenuItem("Quit");
-            quitItem.Click += (s, e) => QuitRequested?.Invoke(this, EventArgs.Empty);
-            contextMenu.Items.Add(quitItem);
+                contextMenu.Items.Add(new ToolStripSeparator());
 
-            contextMenu.Opening += (s, e) => UpdateStatus();
+                var quitItem = new ToolStripMenuItem("Quit");
+                quitItem.Click += (s, e) => QuitRequested?.Invoke(this, EventArgs.Empty);
+                contextMenu.Items.Add(quitItem);
+
+                // Update status on menu opening
+                contextMenu.Opening += (s, e) => UpdateMenuStatus();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error initializing context menu: {ex.Message}");
+                throw;
+            }
+        }
+
+        private void UpdateMenuStatus()
+        {
+            if (isDisposed) return;
+
+            try
+            {
+                if (contextMenu?.Items.Count > 0)
+                {
+                    // Update version info
+                    if (contextMenu.Items[0] is ToolStripMenuItem statusItem)
+                    {
+                        statusItem.Text = $"Version {buildInfoProvider.VersionString}";
+                        statusItem.DropDownItems.Clear();
+                        var buildItem = new ToolStripMenuItem($"Built on {buildInfoProvider.BuildTimestamp}")
+                        {
+                            Enabled = false
+                        };
+                        statusItem.DropDownItems.Add(buildItem);
+                    }
+
+                    // Update network state info
+                    if (contextMenu.Items[2] is ToolStripMenuItem networkStateItem)
+                    {
+                        var stateText = currentTransitionState ? "AP Change in Progress" :
+                                      currentErrorState ? "Error State" : "Normal Operation";
+
+                        networkStateItem.Text = $"Status: {stateText}";
+
+                        if (!string.IsNullOrEmpty(currentTooltipText))
+                        {
+                            networkStateItem.DropDownItems.Clear();
+                            var detailItem = new ToolStripMenuItem(currentTooltipText)
+                            {
+                                Enabled = false
+                            };
+                            networkStateItem.DropDownItems.Add(detailItem);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error updating menu status: {ex.Message}");
+            }
         }
 
         private void ViewLogs_Click(object sender, EventArgs e)
@@ -84,7 +153,6 @@ namespace ping_applet.UI
                     return;
                 }
 
-                // Open log file with default text editor
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = logPath,
@@ -102,26 +170,40 @@ namespace ping_applet.UI
             }
         }
 
-        public void UpdateIcon(string displayText, string tooltipText, bool isError = false)
+        public void UpdateIcon(string displayText, string tooltipText, bool isError = false, bool isTransition = false)
         {
             if (isDisposed) return;
+
+            // Track state changes
+            currentDisplayText = displayText;
+            currentTooltipText = tooltipText;
+            currentErrorState = isError;
+            currentTransitionState = isTransition;
 
             Icon newIcon = null;
             try
             {
-                newIcon = iconGenerator.CreateNumberIcon(displayText, isError);
-                Icon oldIcon = trayIcon.Icon;
+                // Create icon with appropriate color based on state
+                if (isTransition)
+                {
+                    // Orange for AP transition
+                    newIcon = iconGenerator.CreateTransitionIcon(displayText);
+                }
+                else
+                {
+                    // Red for errors, black for normal
+                    newIcon = iconGenerator.CreateNumberIcon(displayText, isError);
+                }
 
+                Icon oldIcon = trayIcon.Icon;
                 trayIcon.Icon = newIcon;
                 trayIcon.Text = tooltipText;
 
-                if (oldIcon != null)
-                {
-                    oldIcon.Dispose();
-                }
+                oldIcon?.Dispose();
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.WriteLine($"Error updating icon: {ex.Message}");
                 newIcon?.Dispose();
                 throw;
             }
@@ -130,17 +212,7 @@ namespace ping_applet.UI
         public void UpdateStatus()
         {
             if (isDisposed) return;
-
-            if (contextMenu?.Items.Count > 0 && contextMenu.Items[0] is ToolStripMenuItem statusItem)
-            {
-                statusItem.Text = $"Version {buildInfoProvider.VersionString}";
-
-                statusItem.DropDownItems.Clear();
-                var buildItem = new ToolStripMenuItem($"Built on {buildInfoProvider.BuildTimestamp}") { Enabled = false };
-                statusItem.DropDownItems.Add(buildItem);
-
-                // No tooltip needed as it causes flickering with frequent updates
-            }
+            UpdateMenuStatus();
         }
 
         protected virtual void Dispose(bool disposing)

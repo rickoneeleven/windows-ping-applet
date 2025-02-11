@@ -14,6 +14,7 @@ namespace ping_applet.Services
         private string _currentBssid;
         private int _currentSignalStrength;
         private bool _isDisposed;
+        private bool _isInitialCheck = true;
         private const int CHECK_INTERVAL = 1000; // 1 second
 
         public event EventHandler<string> BssidChanged;
@@ -46,12 +47,21 @@ namespace ping_applet.Services
             {
                 var (bssid, signalStrength) = await GetWifiInfo();
 
-                // Check for BSSID change
-                if (!string.IsNullOrEmpty(bssid) && bssid != _currentBssid)
+                // Check for BSSID change, ignoring the initial detection
+                if (!string.IsNullOrEmpty(bssid))
                 {
-                    _currentBssid = bssid;
-                    _loggingService.LogInfo($"BSSID changed to: {bssid}");
-                    BssidChanged?.Invoke(this, bssid);
+                    if (bssid != _currentBssid && !_isInitialCheck)
+                    {
+                        _currentBssid = bssid;
+                        _loggingService.LogInfo($"BSSID changed to: {bssid}");
+                        BssidChanged?.Invoke(this, bssid);
+                    }
+                    else if (_isInitialCheck)
+                    {
+                        _currentBssid = bssid;
+                        _loggingService.LogInfo($"Initial BSSID detected: {bssid}");
+                        _isInitialCheck = false;
+                    }
                 }
 
                 // Check for significant signal strength change (>5%)

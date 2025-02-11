@@ -110,7 +110,6 @@ namespace ping_applet.Controllers
                 {
                     _ = pingService.SendPingAsync(networkMonitor.CurrentGateway, PING_TIMEOUT);
                 }
-                loggingService.LogInfo("BSSID transition window ended");
             }
             catch (Exception ex)
             {

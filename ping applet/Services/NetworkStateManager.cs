@@ -26,49 +26,76 @@ namespace ping_applet.Services
         public NetworkStateManager(ILoggingService loggingService)
         {
             _loggingService = loggingService ?? throw new ArgumentNullException(nameof(loggingService));
+            _loggingService.LogInfo("NetworkStateManager initialized");
         }
 
         public async Task StartMonitoring()
         {
             if (_isDisposed) throw new ObjectDisposedException(nameof(NetworkStateManager));
 
-            // Initial check
-            await CheckNetworkState();
+            try
+            {
+                _loggingService.LogInfo("Starting network state monitoring");
 
-            // Start periodic monitoring
-            _monitorTimer = new Timer(CHECK_INTERVAL);
-            _monitorTimer.Elapsed += async (s, e) => await CheckNetworkState();
-            _monitorTimer.Start();
+                // Initial state check
+                await CheckNetworkState();
+
+                // Start periodic monitoring
+                _monitorTimer = new Timer(CHECK_INTERVAL);
+                _monitorTimer.Elapsed += async (s, e) => await CheckNetworkState();
+                _monitorTimer.Start();
+
+                _loggingService.LogInfo("Network state monitoring started successfully");
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogError("Failed to start network monitoring", ex);
+                throw;
+            }
         }
 
         private async Task CheckNetworkState()
         {
+            if (_isDisposed) return;
+
             try
             {
                 var (bssid, signalStrength) = await GetWifiInfo();
 
-                // Check for BSSID change, ignoring the initial detection
-                if (!string.IsNullOrEmpty(bssid))
+                if (string.IsNullOrEmpty(bssid))
                 {
-                    if (bssid != _currentBssid && !_isInitialCheck)
+                    if (_currentBssid != null)
                     {
-                        _currentBssid = bssid;
-                        _loggingService.LogInfo($"BSSID changed to: {bssid}");
-                        BssidChanged?.Invoke(this, bssid);
+                        _loggingService.LogInfo("WiFi connection lost");
+                        _currentBssid = null;
                     }
-                    else if (_isInitialCheck)
+                    return;
+                }
+
+                // Handle BSSID changes
+                if (bssid != _currentBssid)
+                {
+                    if (_isInitialCheck)
                     {
                         _currentBssid = bssid;
                         _loggingService.LogInfo($"Initial BSSID detected: {bssid}");
                         _isInitialCheck = false;
                     }
+                    else
+                    {
+                        var oldBssid = _currentBssid ?? "none";
+                        _currentBssid = bssid;
+                        _loggingService.LogInfo($"BSSID transition detected - From: {oldBssid} To: {bssid}");
+                        BssidChanged?.Invoke(this, bssid);
+                    }
                 }
 
-                // Check for significant signal strength change (>5%)
+                // Handle signal strength changes
                 if (Math.Abs(signalStrength - _currentSignalStrength) > 5)
                 {
+                    var oldStrength = _currentSignalStrength;
                     _currentSignalStrength = signalStrength;
-                    _loggingService.LogInfo($"Signal strength changed to: {signalStrength}%");
+                    _loggingService.LogInfo($"Signal strength changed from {oldStrength}% to {signalStrength}%");
                     SignalStrengthChanged?.Invoke(this, signalStrength);
                 }
             }
@@ -99,13 +126,27 @@ namespace ping_applet.Services
                     string output = await process.StandardOutput.ReadToEndAsync();
                     process.WaitForExit();
 
-                    // Match BSSID pattern XX:XX:XX:XX:XX:XX where X is a hex digit
-                    var bssidMatch = Regex.Match(output, @"BSSID\s+:\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})");
-                    string bssid = bssidMatch.Success ? bssidMatch.Groups[1].Value : null;
+                    if (process.ExitCode != 0)
+                    {
+                        _loggingService.LogError($"netsh command failed with exit code: {process.ExitCode}");
+                        return (null, 0);
+                    }
 
-                    // Extract Signal Strength
+                    // Parse BSSID (XX:XX:XX:XX:XX:XX format)
+                    var bssidMatch = Regex.Match(output, @"BSSID\s+:\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})",
+                        RegexOptions.IgnoreCase);
+
+                    // Parse Signal Strength (xx% format)
                     var signalMatch = Regex.Match(output, @"Signal\s+:\s+(\d+)%");
+
+                    string bssid = bssidMatch.Success ? bssidMatch.Groups[1].Value : null;
                     int signalStrength = signalMatch.Success ? int.Parse(signalMatch.Groups[1].Value) : 0;
+
+                    // Log parsing failures for debugging
+                    if (!bssidMatch.Success)
+                    {
+                        _loggingService.LogInfo("No BSSID found in netsh output");
+                    }
 
                     return (bssid, signalStrength);
                 }
@@ -119,17 +160,33 @@ namespace ping_applet.Services
 
         public void StopMonitoring()
         {
-            _monitorTimer?.Stop();
-            _monitorTimer?.Dispose();
-            _monitorTimer = null;
+            try
+            {
+                _monitorTimer?.Stop();
+                _monitorTimer?.Dispose();
+                _monitorTimer = null;
+                _loggingService.LogInfo("Network state monitoring stopped");
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogError("Error stopping network monitoring", ex);
+            }
         }
 
         protected virtual void Dispose(bool disposing)
         {
             if (!_isDisposed && disposing)
             {
-                StopMonitoring();
-                _isDisposed = true;
+                try
+                {
+                    StopMonitoring();
+                    _isDisposed = true;
+                    _loggingService.LogInfo("NetworkStateManager disposed");
+                }
+                catch (Exception ex)
+                {
+                    _loggingService.LogError("Error during NetworkStateManager disposal", ex);
+                }
             }
         }
 

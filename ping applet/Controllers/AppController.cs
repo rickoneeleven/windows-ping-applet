@@ -21,6 +21,7 @@ namespace ping_applet.Controllers
         private readonly Timer bssidResetTimer;
         private bool isDisposed;
         private bool isInBssidTransition;
+        private string currentDisplayText;
 
         private const int PING_INTERVAL = 1000; // 1 second
         private const int PING_TIMEOUT = 1000;  // 1 second timeout
@@ -39,15 +40,12 @@ namespace ping_applet.Controllers
             this.loggingService = loggingService ?? throw new ArgumentNullException(nameof(loggingService));
             this.trayIconManager = trayIconManager ?? throw new ArgumentNullException(nameof(trayIconManager));
 
-            // Initialize NetworkStateManager
             this.networkStateManager = new NetworkStateManager(loggingService);
 
-            // Initialize BSSID transition timer
             this.bssidResetTimer = new Timer(BSSID_TRANSITION_WINDOW);
             this.bssidResetTimer.AutoReset = false;
             this.bssidResetTimer.Elapsed += BssidResetTimer_Elapsed;
 
-            // Wire up events
             this.networkMonitor.GatewayChanged += NetworkMonitor_GatewayChanged;
             this.networkMonitor.NetworkAvailabilityChanged += NetworkMonitor_NetworkAvailabilityChanged;
             this.pingService.PingCompleted += PingService_PingCompleted;
@@ -65,7 +63,6 @@ namespace ping_applet.Controllers
                 await networkStateManager.StartMonitoring();
                 pingService.StartPingTimer(PING_INTERVAL);
 
-                // Initial ping to current gateway
                 if (!string.IsNullOrEmpty(networkMonitor.CurrentGateway))
                 {
                     await pingService.SendPingAsync(networkMonitor.CurrentGateway, PING_TIMEOUT);
@@ -87,12 +84,15 @@ namespace ping_applet.Controllers
                 bssidResetTimer.Stop();
                 bssidResetTimer.Start();
 
-                // Update UI to show orange state
-                string displayText = "AP";
-                string tooltipText = $"Access Point Change - New BSSID: {newBssid}";
-                UpdateTrayIcon(displayText, tooltipText, isTransition: true);
-
-                loggingService.LogInfo($"BSSID transition started - New BSSID: {newBssid}");
+                if (!string.IsNullOrEmpty(currentDisplayText))
+                {
+                    trayIconManager.UpdateIcon(
+                        currentDisplayText,
+                        $"Access Point Change - BSSID: {newBssid}",
+                        false,
+                        true
+                    );
+                }
             }
             catch (Exception ex)
             {
@@ -105,7 +105,6 @@ namespace ping_applet.Controllers
             try
             {
                 isInBssidTransition = false;
-                // Force a ping to update the display
                 if (!string.IsNullOrEmpty(networkMonitor.CurrentGateway))
                 {
                     _ = pingService.SendPingAsync(networkMonitor.CurrentGateway, PING_TIMEOUT);
@@ -148,23 +147,28 @@ namespace ping_applet.Controllers
 
             try
             {
-                if (isInBssidTransition)
-                {
-                    // Don't update the icon during BSSID transition
-                    return;
-                }
-
                 if (reply.Status == IPStatus.Success)
                 {
                     string displayText = reply.RoundtripTime.ToString();
                     string tooltipText = $"{networkMonitor.CurrentGateway}: {reply.RoundtripTime}ms";
-                    UpdateTrayIcon(displayText, tooltipText);
-                    loggingService.LogInfo($"Ping successful - Gateway: {networkMonitor.CurrentGateway}, Time: {reply.RoundtripTime}ms");
+                    currentDisplayText = displayText;
+
+                    trayIconManager.UpdateIcon(
+                        displayText,
+                        tooltipText,
+                        false,
+                        isInBssidTransition
+                    );
+
+                    if (!isInBssidTransition)
+                    {
+                        loggingService.LogInfo($"Ping successful - Gateway: {networkMonitor.CurrentGateway}, Time: {reply.RoundtripTime}ms");
+                    }
                 }
                 else
                 {
                     string tooltipText = $"{networkMonitor.CurrentGateway}: Failed";
-                    UpdateTrayIcon("X", tooltipText, true);
+                    trayIconManager.UpdateIcon("X", tooltipText, true, false);
                     loggingService.LogInfo($"Ping failed - Gateway: {networkMonitor.CurrentGateway}, Status: {reply.Status}");
                 }
             }
@@ -181,25 +185,12 @@ namespace ping_applet.Controllers
             ShowErrorState("!");
         }
 
-        private void UpdateTrayIcon(string displayText, string tooltipText, bool isError = false, bool isTransition = false)
-        {
-            try
-            {
-                // Add new parameter for transition state (orange color)
-                trayIconManager.UpdateIcon(displayText, tooltipText, isError, isTransition);
-            }
-            catch (Exception ex)
-            {
-                loggingService.LogError("Failed to update tray icon", ex);
-            }
-        }
-
         private void ShowErrorState(string errorText)
         {
             try
             {
                 string tooltipText = $"Error: {errorText}";
-                UpdateTrayIcon(errorText, tooltipText, true);
+                trayIconManager.UpdateIcon(errorText, tooltipText, true, false);
             }
             catch (Exception ex)
             {

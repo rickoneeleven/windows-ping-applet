@@ -21,6 +21,7 @@ namespace ping_applet.UI
         private string currentTooltipText;
         private bool currentErrorState;
         private bool currentTransitionState;
+        private bool currentUseBlackText;
 
         public event EventHandler QuitRequested;
         public bool IsDisposed => isDisposed;
@@ -170,7 +171,7 @@ namespace ping_applet.UI
             }
         }
 
-        public void UpdateIcon(string displayText, string tooltipText, bool isError = false, bool isTransition = false)
+        public void UpdateIcon(string displayText, string tooltipText, bool isError = false, bool isTransition = false, bool useBlackText = false)
         {
             if (isDisposed) return;
 
@@ -179,6 +180,7 @@ namespace ping_applet.UI
             currentTooltipText = tooltipText;
             currentErrorState = isError;
             currentTransitionState = isTransition;
+            currentUseBlackText = useBlackText;
 
             Icon newIcon = null;
             try
@@ -186,12 +188,14 @@ namespace ping_applet.UI
                 // Create icon with appropriate color based on state
                 if (isTransition)
                 {
-                    // Orange for AP transition
-                    newIcon = iconGenerator.CreateTransitionIcon(displayText);
+                    // Orange for AP transition, with black or white text based on parameter
+                    newIcon = useBlackText ?
+                        iconGenerator.CreateTransitionIconWithBlackText(displayText) :
+                        iconGenerator.CreateTransitionIcon(displayText);
                 }
                 else
                 {
-                    // Red for errors, black for normal
+                    // Red for errors, black for normal, always with white text
                     newIcon = iconGenerator.CreateNumberIcon(displayText, isError);
                 }
 

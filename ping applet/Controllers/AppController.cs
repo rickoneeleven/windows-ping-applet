@@ -90,7 +90,8 @@ namespace ping_applet.Controllers
                         currentDisplayText,
                         $"Access Point Change - BSSID: {newBssid}",
                         false,
-                        true
+                        true,
+                        true  // Use black text during transition
                     );
                 }
             }
@@ -157,7 +158,8 @@ namespace ping_applet.Controllers
                         displayText,
                         tooltipText,
                         false,
-                        isInBssidTransition
+                        isInBssidTransition,
+                        isInBssidTransition  // Use black text during transition
                     );
 
                     if (!isInBssidTransition)
@@ -168,7 +170,7 @@ namespace ping_applet.Controllers
                 else
                 {
                     string tooltipText = $"{networkMonitor.CurrentGateway}: Failed";
-                    trayIconManager.UpdateIcon("X", tooltipText, true, false);
+                    trayIconManager.UpdateIcon("X", tooltipText, true, false, false);
                     loggingService.LogInfo($"Ping failed - Gateway: {networkMonitor.CurrentGateway}, Status: {reply.Status}");
                 }
             }
@@ -190,7 +192,7 @@ namespace ping_applet.Controllers
             try
             {
                 string tooltipText = $"Error: {errorText}";
-                trayIconManager.UpdateIcon(errorText, tooltipText, true, false);
+                trayIconManager.UpdateIcon(errorText, tooltipText, true, false, false);
             }
             catch (Exception ex)
             {

@@ -20,6 +20,7 @@ namespace ping_applet.UI
         private bool isDisposed;
         private readonly string logPath;
         private ToolStripMenuItem startupMenuItem;
+        private ToolStripMenuItem notificationsMenuItem;
         private ToolStripMenuItem currentAPMenuItem;
         private ToolStripMenuItem knownAPsMenuItem;
         private ToolStripMenuItem locationServicesMenuItem;
@@ -31,6 +32,7 @@ namespace ping_applet.UI
         private bool currentTransitionState;
         private bool currentUseBlackText;
         private string currentBSSID;
+        private bool notificationsEnabled = true;
 
         // Constants for balloon tips
         private const int BALLOON_TIMEOUT = 2000; // 2 seconds
@@ -67,7 +69,7 @@ namespace ping_applet.UI
 
         public void ShowTransitionBalloon(string oldBssid, string newBssid)
         {
-            if (isDisposed) return;
+            if (isDisposed || !notificationsEnabled) return;
 
             try
             {
@@ -106,6 +108,7 @@ namespace ping_applet.UI
                 loggingService.LogError("Error showing transition balloon", ex);
             }
         }
+
         private void InitializeContextMenu()
         {
             try
@@ -162,6 +165,13 @@ namespace ping_applet.UI
                 startupMenuItem.Checked = startupManager.IsStartupEnabled();
                 contextMenu.Items.Add(startupMenuItem);
 
+                // Add Notification Popups option
+                notificationsMenuItem = new ToolStripMenuItem("Notification Popups");
+                notificationsMenuItem.Click += NotificationsMenuItem_Click;
+                notificationsEnabled = knownAPManager.GetNotificationsEnabled();
+                notificationsMenuItem.Checked = notificationsEnabled;
+                contextMenu.Items.Add(notificationsMenuItem);
+
                 contextMenu.Items.Add(new ToolStripSeparator());
 
                 var quitItem = new ToolStripMenuItem("Quit");
@@ -175,6 +185,26 @@ namespace ping_applet.UI
             {
                 loggingService.LogError("Error initializing context menu", ex);
                 throw;
+            }
+        }
+
+        private void NotificationsMenuItem_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                notificationsEnabled = !notificationsEnabled;
+                notificationsMenuItem.Checked = notificationsEnabled;
+                knownAPManager.SetNotificationsEnabled(notificationsEnabled);
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error toggling notifications", ex);
+                MessageBox.Show(
+                    "Failed to save notification preference. Please check your permissions.",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
             }
         }
 

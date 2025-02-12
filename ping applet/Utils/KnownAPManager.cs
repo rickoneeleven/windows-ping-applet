@@ -18,6 +18,7 @@ namespace ping_applet.Utils
         private readonly HashSet<string> _rootBssids;
         private readonly object _lockObject = new object();
         private bool _isDisposed;
+        private StoredSettings settings;
 
         /// <summary>
         /// Initializes a new instance of the KnownAPManager class
@@ -33,6 +34,7 @@ namespace ping_applet.Utils
             );
             _bssidToName = new Dictionary<string, string>();
             _rootBssids = new HashSet<string>();
+            settings = new StoredSettings();
 
             try
             {
@@ -73,6 +75,31 @@ namespace ping_applet.Utils
                 {
                     return _bssidToName.Keys.Except(_rootBssids).ToList();
                 }
+            }
+        }
+
+        /// <summary>
+        /// Gets whether notifications are enabled
+        /// </summary>
+        public bool GetNotificationsEnabled()
+        {
+            ThrowIfDisposed();
+            lock (_lockObject)
+            {
+                return settings.NotificationsEnabled;
+            }
+        }
+
+        /// <summary>
+        /// Sets whether notifications are enabled
+        /// </summary>
+        public void SetNotificationsEnabled(bool enabled)
+        {
+            ThrowIfDisposed();
+            lock (_lockObject)
+            {
+                settings.NotificationsEnabled = enabled;
+                SaveSettings();
             }
         }
 
@@ -232,7 +259,7 @@ namespace ping_applet.Utils
                 if (File.Exists(_settingsPath))
                 {
                     var json = File.ReadAllText(_settingsPath);
-                    var settings = JsonConvert.DeserializeObject<StoredSettings>(json);
+                    settings = JsonConvert.DeserializeObject<StoredSettings>(json) ?? new StoredSettings();
 
                     lock (_lockObject)
                     {
@@ -255,7 +282,7 @@ namespace ping_applet.Utils
             catch (Exception ex)
             {
                 _loggingService.LogError("Failed to load settings", ex);
-                // Continue with empty settings rather than throwing
+                settings = new StoredSettings(); // Use defaults on error
             }
         }
 
@@ -263,22 +290,15 @@ namespace ping_applet.Utils
         {
             try
             {
-                var settings = new StoredSettings
+                var settingsToSave = new StoredSettings
                 {
-                    BssidToName = _bssidToName.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-                    RootBssids = _rootBssids.ToList()
+                    BssidToName = new Dictionary<string, string>(_bssidToName),
+                    RootBssids = _rootBssids.ToList(),
+                    NotificationsEnabled = settings.NotificationsEnabled
                 };
 
-                var json = JsonConvert.SerializeObject(settings, Formatting.Indented);
-                var directory = Path.GetDirectoryName(_settingsPath);
-
-                if (!Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
+                var json = JsonConvert.SerializeObject(settingsToSave, Formatting.Indented);
                 File.WriteAllText(_settingsPath, json);
-                _loggingService.LogInfo("Settings saved successfully");
             }
             catch (Exception ex)
             {
@@ -321,6 +341,7 @@ namespace ping_applet.Utils
         {
             public Dictionary<string, string> BssidToName { get; set; } = new Dictionary<string, string>();
             public List<string> RootBssids { get; set; } = new List<string>();
+            public bool NotificationsEnabled { get; set; } = true;
         }
     }
 }

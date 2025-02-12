@@ -42,18 +42,15 @@ namespace ping_applet.UI
             this.knownAPManager = new KnownAPManager(loggingService);
             iconGenerator = new IconGenerator();
 
-            // Initialize log path
             logPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "PingApplet",
                 "ping.log"
             );
 
-            // Initialize context menu with enhanced status info
             contextMenu = new ContextMenuStrip();
             InitializeContextMenu();
 
-            // Initialize tray icon with transition state support
             trayIcon = new NotifyIcon
             {
                 Icon = iconGenerator.CreateNumberIcon("--"),
@@ -80,20 +77,13 @@ namespace ping_applet.UI
 
                 contextMenu.Items.Add(new ToolStripSeparator());
 
-                // Add enhanced status item that will show version and connection info
-                var statusItem = new ToolStripMenuItem("Status")
+                // Version info
+                var versionItem = new ToolStripMenuItem($"Version {buildInfoProvider.VersionString}")
                 {
                     Enabled = false
                 };
-                contextMenu.Items.Add(statusItem);
-                contextMenu.Items.Add(new ToolStripSeparator());
+                contextMenu.Items.Add(versionItem);
 
-                // Add Network State section
-                var networkStateItem = new ToolStripMenuItem("Network State")
-                {
-                    Enabled = false
-                };
-                contextMenu.Items.Add(networkStateItem);
                 contextMenu.Items.Add(new ToolStripSeparator());
 
                 // Add View Logs option
@@ -115,7 +105,7 @@ namespace ping_applet.UI
                 quitItem.Click += (s, e) => QuitRequested?.Invoke(this, EventArgs.Empty);
                 contextMenu.Items.Add(quitItem);
 
-                // Update status on menu opening
+                // Update menu on opening
                 contextMenu.Opening += ContextMenu_Opening;
             }
             catch (Exception ex)
@@ -127,7 +117,6 @@ namespace ping_applet.UI
 
         private void ContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
         {
-            UpdateMenuStatus();
             UpdateKnownAPsMenu();
         }
 
@@ -167,7 +156,6 @@ namespace ping_applet.UI
             var displayName = knownAPManager.GetDisplayName(bssid);
             var item = new ToolStripMenuItem(displayName);
 
-            // Create submenu for AP options
             var renameItem = new ToolStripMenuItem("Rename");
             renameItem.Click += (s, e) => RenameAP(bssid);
 
@@ -270,54 +258,6 @@ namespace ping_applet.UI
             }
         }
 
-        private void UpdateMenuStatus()
-        {
-            if (isDisposed) return;
-
-            try
-            {
-                if (contextMenu?.Items.Count > 0)
-                {
-                    // Update version info
-                    var statusItem = contextMenu.Items[3] as ToolStripMenuItem;
-                    if (statusItem != null)
-                    {
-                        statusItem.Text = $"Version {buildInfoProvider.VersionString}";
-                        statusItem.DropDownItems.Clear();
-                        var buildItem = new ToolStripMenuItem($"Built on {buildInfoProvider.BuildTimestamp}")
-                        {
-                            Enabled = false
-                        };
-                        statusItem.DropDownItems.Add(buildItem);
-                    }
-
-                    // Update network state info
-                    var networkStateItem = contextMenu.Items[5] as ToolStripMenuItem;
-                    if (networkStateItem != null)
-                    {
-                        var stateText = currentTransitionState ? "AP Change in Progress" :
-                                      currentErrorState ? "Error State" : "Normal Operation";
-
-                        networkStateItem.Text = $"Status: {stateText}";
-
-                        if (!string.IsNullOrEmpty(currentTooltipText))
-                        {
-                            networkStateItem.DropDownItems.Clear();
-                            var detailItem = new ToolStripMenuItem(currentTooltipText)
-                            {
-                                Enabled = false
-                            };
-                            networkStateItem.DropDownItems.Add(detailItem);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                loggingService.LogError("Error updating menu status", ex);
-            }
-        }
-
         public void UpdateCurrentAP(string bssid)
         {
             if (isDisposed) return;
@@ -329,12 +269,10 @@ namespace ping_applet.UI
                 {
                     if (!knownAPManager.GetDisplayName(bssid).Equals(bssid))
                     {
-                        // AP is already known
                         currentAPMenuItem.Text = $"AP: {knownAPManager.GetDisplayName(bssid)}";
                     }
                     else
                     {
-                        // New AP, add to unsorted
                         knownAPManager.AddNewAP(bssid);
                         currentAPMenuItem.Text = $"AP: {bssid}";
                     }
@@ -416,7 +354,6 @@ namespace ping_applet.UI
         {
             if (isDisposed) return;
 
-            // Track state changes
             currentDisplayText = displayText;
             currentTooltipText = tooltipText;
             currentErrorState = isError;
@@ -426,17 +363,14 @@ namespace ping_applet.UI
             Icon newIcon = null;
             try
             {
-                // Create icon with appropriate color based on state
                 if (isTransition)
                 {
-                    // Orange for AP transition, with black or white text based on parameter
                     newIcon = useBlackText ?
                         iconGenerator.CreateTransitionIconWithBlackText(displayText) :
                         iconGenerator.CreateTransitionIcon(displayText);
                 }
                 else
                 {
-                    // Red for errors, black for normal, always with white text
                     newIcon = iconGenerator.CreateNumberIcon(displayText, isError);
                 }
 
@@ -454,24 +388,15 @@ namespace ping_applet.UI
             }
         }
 
-        public void UpdateStatus()
-        {
-            if (isDisposed) return;
-            UpdateMenuStatus();
-        }
-
         protected virtual void Dispose(bool disposing)
         {
             if (!isDisposed && disposing)
             {
                 try
                 {
-                    // First make tray icon invisible
                     trayIcon.Visible = false;
-                    // Then dispose components in reverse order of dependency
                     contextMenu?.Dispose();
                     iconGenerator?.Dispose();
-                    // Dispose KnownAPManager last since it might try to log during disposal
                     knownAPManager?.Dispose();
                 }
                 catch (Exception)

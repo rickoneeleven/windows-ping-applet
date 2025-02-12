@@ -133,7 +133,6 @@ namespace ping_applet.Controllers
                 loggingService.LogInfo($"Gateway changed to: {newGateway}");
                 await pingService.SendPingAsync(newGateway, PING_TIMEOUT);
             }
-            trayIconManager.UpdateStatus();
         }
 
         private void NetworkMonitor_NetworkAvailabilityChanged(object sender, bool isAvailable)

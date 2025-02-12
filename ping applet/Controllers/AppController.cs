@@ -5,6 +5,7 @@ using System.Timers;
 using ping_applet.Core.Interfaces;
 using ping_applet.Services;
 using ping_applet.UI;
+using static ping_applet.Services.NetworkStateManager;
 
 namespace ping_applet.Controllers
 {
@@ -97,7 +98,7 @@ namespace ping_applet.Controllers
             }
         }
 
-        private void NetworkStateManager_BssidChanged(object sender, string newBssid)
+        private void NetworkStateManager_BssidChanged(object sender, BssidChangeEventArgs e)
         {
             try
             {
@@ -106,11 +107,14 @@ namespace ping_applet.Controllers
                 bssidResetTimer.Start();
 
                 // Update the tray icon's current AP display
-                trayIconManager.UpdateCurrentAP(newBssid);
+                trayIconManager.UpdateCurrentAP(e.NewBssid);
+
+                // Show the transition balloon notification
+                trayIconManager.ShowTransitionBalloon(e.OldBssid, e.NewBssid);
 
                 if (!string.IsNullOrEmpty(currentDisplayText))
                 {
-                    string tooltipText = FormatTooltip(networkMonitor.CurrentGateway, newBssid);
+                    string tooltipText = FormatTooltip(networkMonitor.CurrentGateway, e.NewBssid);
                     trayIconManager.UpdateIcon(
                         currentDisplayText,
                         tooltipText,

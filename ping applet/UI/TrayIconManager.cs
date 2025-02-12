@@ -32,6 +32,10 @@ namespace ping_applet.UI
         private bool currentUseBlackText;
         private string currentBSSID;
 
+        // Constants for balloon tips
+        private const int BALLOON_TIMEOUT = 2000; // 2 seconds
+        private const string BALLOON_TITLE = "Network Change";
+
         public event EventHandler QuitRequested;
         public bool IsDisposed => isDisposed;
 
@@ -61,6 +65,47 @@ namespace ping_applet.UI
             };
         }
 
+        public void ShowTransitionBalloon(string oldBssid, string newBssid)
+        {
+            if (isDisposed) return;
+
+            try
+            {
+                string message;
+                if (string.IsNullOrEmpty(oldBssid))
+                {
+                    // Initial connection or connection after being disconnected
+                    var newApName = GetAPDisplayName(newBssid);
+                    message = $"Connected to {newApName}";
+                }
+                else if (string.IsNullOrEmpty(newBssid))
+                {
+                    // Disconnection
+                    var oldApName = GetAPDisplayName(oldBssid);
+                    message = $"Disconnected from {oldApName}";
+                }
+                else
+                {
+                    // Transition between APs
+                    var oldApName = GetAPDisplayName(oldBssid);
+                    var newApName = GetAPDisplayName(newBssid);
+                    message = $"Switched from {oldApName} to {newApName}";
+                }
+
+                trayIcon.ShowBalloonTip(
+                    BALLOON_TIMEOUT,
+                    BALLOON_TITLE,
+                    message,
+                    ToolTipIcon.Info
+                );
+
+                loggingService.LogInfo($"Showed transition balloon: {message}");
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error showing transition balloon", ex);
+            }
+        }
         private void InitializeContextMenu()
         {
             try

@@ -12,6 +12,7 @@ namespace ping_applet.Services
         private readonly ILoggingService _loggingService;
         private Timer _monitorTimer;
         private string _currentBssid;
+        private string _previousBssid;  // Added to track previous BSSID
         private int _currentSignalStrength;
         private int _currentChannel;
         private string _currentBand;
@@ -20,11 +21,13 @@ namespace ping_applet.Services
         private bool _isLocationServicesEnabled = true;
         private const int CHECK_INTERVAL = 1000; // 1 second
 
-        public event EventHandler<string> BssidChanged;
+        // Updated event to include both old and new BSSIDs
+        public event EventHandler<BssidChangeEventArgs> BssidChanged;
         public event EventHandler<int> SignalStrengthChanged;
         public event EventHandler<bool> LocationServicesStateChanged;
 
         public string CurrentBssid => _currentBssid;
+        public string PreviousBssid => _previousBssid;  // Added property for previous BSSID
         public int CurrentSignalStrength => _currentSignalStrength;
         public int CurrentChannel => _currentChannel;
         public string CurrentBand => _currentBand;
@@ -73,10 +76,11 @@ namespace ping_applet.Services
                     if (_currentBssid != null)
                     {
                         _loggingService.LogInfo("WiFi connection lost");
+                        _previousBssid = _currentBssid;  // Store the last known BSSID
                         _currentBssid = null;
                         _currentChannel = 0;
                         _currentBand = null;
-                        BssidChanged?.Invoke(this, null);
+                        BssidChanged?.Invoke(this, new BssidChangeEventArgs(_previousBssid, null));
                     }
                     return;
                 }
@@ -84,6 +88,7 @@ namespace ping_applet.Services
                 // Handle BSSID changes
                 if (bssid != _currentBssid)
                 {
+                    _previousBssid = _currentBssid;  // Store the old BSSID before updating
                     var oldBssid = _currentBssid ?? "none";
                     var oldChannel = _currentChannel;
                     var oldBand = _currentBand ?? "unknown";
@@ -105,9 +110,9 @@ namespace ping_applet.Services
                             $"  To: BSSID={bssid}, Channel={channel}, Band={band}"
                         );
                     }
-                    BssidChanged?.Invoke(this, bssid);
+                    BssidChanged?.Invoke(this, new BssidChangeEventArgs(_previousBssid, bssid));
                 }
-                // Handle signal strength changes
+                // Rest of the method remains unchanged
                 else if (Math.Abs(signalStrength - _currentSignalStrength) > 5)
                 {
                     var oldStrength = _currentSignalStrength;
@@ -118,7 +123,6 @@ namespace ping_applet.Services
                     );
                     SignalStrengthChanged?.Invoke(this, signalStrength);
                 }
-                // Handle channel/band changes without BSSID change (rare but possible)
                 else if (channel != _currentChannel || band != _currentBand)
                 {
                     _loggingService.LogInfo(
@@ -133,7 +137,7 @@ namespace ping_applet.Services
                 // Always invoke BssidChanged on the initial check to update UI
                 if (_isInitialCheck)
                 {
-                    BssidChanged?.Invoke(this, bssid);
+                    BssidChanged?.Invoke(this, new BssidChangeEventArgs(null, bssid));
                 }
             }
             catch (Exception ex)
@@ -254,6 +258,18 @@ namespace ping_applet.Services
                 {
                     _loggingService.LogError("Error during NetworkStateManager disposal", ex);
                 }
+            }
+        }
+
+        public class BssidChangeEventArgs : EventArgs
+        {
+            public string OldBssid { get; }
+            public string NewBssid { get; }
+
+            public BssidChangeEventArgs(string oldBssid, string newBssid)
+            {
+                OldBssid = oldBssid;
+                NewBssid = newBssid;
             }
         }
 

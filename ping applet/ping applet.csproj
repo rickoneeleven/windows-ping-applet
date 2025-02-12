@@ -67,6 +67,7 @@
     <Compile Include="UI\IconGenerator.cs" />
     <Compile Include="UI\TrayIconManager.cs" />
     <Compile Include="Utils\BuildInfoProvider.cs" />
+    <Compile Include="Utils\StartupManager.cs" />
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>

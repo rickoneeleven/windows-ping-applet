@@ -13,8 +13,10 @@ namespace ping_applet.UI
         private readonly ContextMenuStrip contextMenu;
         private readonly IconGenerator iconGenerator;
         private readonly BuildInfoProvider buildInfoProvider;
+        private readonly StartupManager startupManager;
         private bool isDisposed;
         private readonly string logPath;
+        private ToolStripMenuItem startupMenuItem;
 
         // UI state tracking
         private string currentDisplayText;
@@ -29,6 +31,7 @@ namespace ping_applet.UI
         public TrayIconManager(BuildInfoProvider buildInfoProvider)
         {
             this.buildInfoProvider = buildInfoProvider ?? throw new ArgumentNullException(nameof(buildInfoProvider));
+            this.startupManager = new StartupManager();
             iconGenerator = new IconGenerator();
 
             // Initialize log path
@@ -76,6 +79,14 @@ namespace ping_applet.UI
                 var viewLogsItem = new ToolStripMenuItem("View Log");
                 viewLogsItem.Click += ViewLogs_Click;
                 contextMenu.Items.Add(viewLogsItem);
+
+                contextMenu.Items.Add(new ToolStripSeparator());
+
+                // Add Start on Login option
+                startupMenuItem = new ToolStripMenuItem("Start on Login");
+                startupMenuItem.Click += StartupMenuItem_Click;
+                startupMenuItem.Checked = startupManager.IsStartupEnabled();
+                contextMenu.Items.Add(startupMenuItem);
 
                 contextMenu.Items.Add(new ToolStripSeparator());
 
@@ -136,6 +147,36 @@ namespace ping_applet.UI
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error updating menu status: {ex.Message}");
+            }
+        }
+
+        private void StartupMenuItem_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                bool newState = !startupMenuItem.Checked;
+                if (startupManager.SetStartupEnabled(newState))
+                {
+                    startupMenuItem.Checked = newState;
+                }
+                else
+                {
+                    MessageBox.Show(
+                        "Failed to update startup settings. Please check your permissions.",
+                        "Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Failed to update startup settings: {ex.Message}",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
             }
         }
 

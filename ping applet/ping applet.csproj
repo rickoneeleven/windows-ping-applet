@@ -71,6 +71,8 @@
     <Compile Include="Services\NetworkStateManager.cs" />
     <Compile Include="Services\PingService.cs" />
     <Compile Include="UI\IconGenerator.cs" />
+    <Compile Include="UI\MenuManager.cs" />
+    <Compile Include="UI\NotificationManager.cs" />
     <Compile Include="UI\TrayIconManager.cs" />
     <Compile Include="Utils\BuildInfoProvider.cs" />
     <Compile Include="Utils\KnownAPManager.cs" />

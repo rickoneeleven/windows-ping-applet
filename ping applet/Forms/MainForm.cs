@@ -89,14 +89,22 @@ namespace ping_applet
             {
                 if (appController != null)
                 {
+                    // First remove the event handler to prevent any last-minute logging attempts
                     appController.ApplicationExit -= AppController_ApplicationExit;
+                    // Then dispose the controller which will handle disposing other services
                     appController.Dispose();
                     appController = null;
                 }
             }
             catch (Exception ex)
             {
-                HandleCleanupError(ex);
+                // Since LoggingService might be disposed, we'll show a message box instead of logging
+                MessageBox.Show(
+                    $"Error during cleanup: {ex.Message}",
+                    "Cleanup Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
             }
         }
 

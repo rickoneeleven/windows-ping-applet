@@ -464,11 +464,20 @@ namespace ping_applet.UI
         {
             if (!isDisposed && disposing)
             {
-                trayIcon.Visible = false;
-                trayIcon.Dispose();
-                contextMenu.Dispose();
-                iconGenerator.Dispose();
-                knownAPManager.Dispose();
+                try
+                {
+                    // First make tray icon invisible
+                    trayIcon.Visible = false;
+                    // Then dispose components in reverse order of dependency
+                    contextMenu?.Dispose();
+                    iconGenerator?.Dispose();
+                    // Dispose KnownAPManager last since it might try to log during disposal
+                    knownAPManager?.Dispose();
+                }
+                catch (Exception)
+                {
+                    // Swallow exceptions during cleanup
+                }
                 isDisposed = true;
             }
         }

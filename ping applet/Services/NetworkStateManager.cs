@@ -17,10 +17,12 @@ namespace ping_applet.Services
         private string _currentBand;
         private bool _isDisposed;
         private bool _isInitialCheck = true;
+        private bool _isLocationServicesEnabled = true;
         private const int CHECK_INTERVAL = 1000; // 1 second
 
         public event EventHandler<string> BssidChanged;
         public event EventHandler<int> SignalStrengthChanged;
+        public event EventHandler<bool> LocationServicesStateChanged;
 
         public string CurrentBssid => _currentBssid;
         public int CurrentSignalStrength => _currentSignalStrength;
@@ -163,8 +165,33 @@ namespace ping_applet.Services
 
                     if (process.ExitCode != 0)
                     {
-                        _loggingService.LogError($"netsh command failed with exit code: {process.ExitCode}");
+                        // Check if output contains location services error or elevation error
+                        bool isLocationServicesError = output.Contains("Network shell commands need location permission");
+                        bool isElevationError = output.Contains("error 5") && output.Contains("requires elevation");
+
+                        if (isLocationServicesError || isElevationError)
+                        {
+                            if (_isLocationServicesEnabled)
+                            {
+                                _isLocationServicesEnabled = false;
+                                LocationServicesStateChanged?.Invoke(this, false);
+                                _loggingService.LogError("Location services are disabled or netsh requires elevation");
+                            }
+                        }
+                        else
+                        {
+                            _loggingService.LogError($"netsh command failed with exit code: {process.ExitCode}");
+                        }
                         return (null, 0, 0, null);
+                    }
+
+                    // If we got here successfully and location services were previously disabled,
+                    // notify that they're now enabled
+                    if (!_isLocationServicesEnabled)
+                    {
+                        _isLocationServicesEnabled = true;
+                        LocationServicesStateChanged?.Invoke(this, true);
+                        _loggingService.LogInfo("Location services are now enabled");
                     }
 
                     // Parse BSSID (XX:XX:XX:XX:XX:XX format)

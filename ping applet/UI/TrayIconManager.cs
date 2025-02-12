@@ -22,6 +22,7 @@ namespace ping_applet.UI
         private ToolStripMenuItem startupMenuItem;
         private ToolStripMenuItem currentAPMenuItem;
         private ToolStripMenuItem knownAPsMenuItem;
+        private ToolStripMenuItem locationServicesMenuItem;
 
         // UI state tracking
         private string currentDisplayText;
@@ -64,6 +65,23 @@ namespace ping_applet.UI
         {
             try
             {
+                // Add location services warning (initially hidden)
+                locationServicesMenuItem = new ToolStripMenuItem("AP Tracking Disabled")
+                {
+                    Visible = false,
+                    ForeColor = Color.Red
+                };
+                locationServicesMenuItem.Click += (s, e) => OpenLocationSettings();
+                var locationDescription = new ToolStripMenuItem(
+                    "To enable AP Tracking, you need to turn on \"Location Services->Let apps access your location->Let desktop apps access your location\" " +
+                    "so the \"Network Command Shell\" works. We do not track your location.")
+                {
+                    Enabled = false
+                };
+                locationServicesMenuItem.DropDownItems.Add(locationDescription);
+                contextMenu.Items.Add(locationServicesMenuItem);
+                contextMenu.Items.Add(new ToolStripSeparator());
+
                 // Add current AP display
                 currentAPMenuItem = new ToolStripMenuItem("AP: not on wireless")
                 {
@@ -112,6 +130,41 @@ namespace ping_applet.UI
             {
                 loggingService.LogError("Error initializing context menu", ex);
                 throw;
+            }
+        }
+
+        private void OpenLocationSettings()
+        {
+            try
+            {
+                Process.Start("ms-settings:privacy-location");
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error opening location settings", ex);
+                MessageBox.Show(
+                    "Could not open Location Settings automatically. Please open Windows Settings -> Privacy & Security -> Location",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+        }
+
+        public void UpdateLocationServicesState(bool isDisabled)
+        {
+            if (isDisposed) return;
+
+            try
+            {
+                if (locationServicesMenuItem != null)
+                {
+                    locationServicesMenuItem.Visible = isDisabled;
+                }
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error updating location services state", ex);
             }
         }
 
@@ -388,9 +441,6 @@ namespace ping_applet.UI
             }
         }
 
-        /// <summary>
-        /// Gets the display name for an AP (custom name if configured, otherwise BSSID)
-        /// </summary>
         public string GetAPDisplayName(string bssid)
         {
             if (isDisposed) return bssid;

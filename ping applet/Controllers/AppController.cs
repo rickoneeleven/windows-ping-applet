@@ -52,6 +52,27 @@ namespace ping_applet.Controllers
             this.pingService.PingError += PingService_PingError;
             this.trayIconManager.QuitRequested += (s, e) => ApplicationExit?.Invoke(this, EventArgs.Empty);
             this.networkStateManager.BssidChanged += NetworkStateManager_BssidChanged;
+            this.networkStateManager.LocationServicesStateChanged += NetworkStateManager_LocationServicesStateChanged;
+        }
+
+        private void NetworkStateManager_LocationServicesStateChanged(object sender, bool isEnabled)
+        {
+            try
+            {
+                trayIconManager.UpdateLocationServicesState(!isEnabled);
+                if (!isEnabled)
+                {
+                    loggingService.LogInfo("Location services are disabled - AP tracking will not work");
+                }
+                else
+                {
+                    loggingService.LogInfo("Location services are now enabled - AP tracking resumed");
+                }
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error handling location services state change", ex);
+            }
         }
 
         public async Task InitializeAsync()

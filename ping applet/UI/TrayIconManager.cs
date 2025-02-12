@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
 using ping_applet.Utils;
+using ping_applet.Core.Interfaces;
 
 namespace ping_applet.UI
 {
@@ -14,9 +15,13 @@ namespace ping_applet.UI
         private readonly IconGenerator iconGenerator;
         private readonly BuildInfoProvider buildInfoProvider;
         private readonly StartupManager startupManager;
+        private readonly KnownAPManager knownAPManager;
+        private readonly ILoggingService loggingService;
         private bool isDisposed;
         private readonly string logPath;
         private ToolStripMenuItem startupMenuItem;
+        private ToolStripMenuItem currentAPMenuItem;
+        private ToolStripMenuItem knownAPsMenuItem;
 
         // UI state tracking
         private string currentDisplayText;
@@ -24,14 +29,17 @@ namespace ping_applet.UI
         private bool currentErrorState;
         private bool currentTransitionState;
         private bool currentUseBlackText;
+        private string currentBSSID;
 
         public event EventHandler QuitRequested;
         public bool IsDisposed => isDisposed;
 
-        public TrayIconManager(BuildInfoProvider buildInfoProvider)
+        public TrayIconManager(BuildInfoProvider buildInfoProvider, ILoggingService loggingService)
         {
             this.buildInfoProvider = buildInfoProvider ?? throw new ArgumentNullException(nameof(buildInfoProvider));
+            this.loggingService = loggingService ?? throw new ArgumentNullException(nameof(loggingService));
             this.startupManager = new StartupManager();
+            this.knownAPManager = new KnownAPManager(loggingService);
             iconGenerator = new IconGenerator();
 
             // Initialize log path
@@ -59,6 +67,19 @@ namespace ping_applet.UI
         {
             try
             {
+                // Add current AP display
+                currentAPMenuItem = new ToolStripMenuItem("AP: Not Connected")
+                {
+                    Enabled = false
+                };
+                contextMenu.Items.Add(currentAPMenuItem);
+
+                // Add Known APs menu
+                knownAPsMenuItem = new ToolStripMenuItem("Known APs");
+                contextMenu.Items.Add(knownAPsMenuItem);
+
+                contextMenu.Items.Add(new ToolStripSeparator());
+
                 // Add enhanced status item that will show version and connection info
                 var statusItem = new ToolStripMenuItem("Status")
                 {
@@ -95,12 +116,157 @@ namespace ping_applet.UI
                 contextMenu.Items.Add(quitItem);
 
                 // Update status on menu opening
-                contextMenu.Opening += (s, e) => UpdateMenuStatus();
+                contextMenu.Opening += ContextMenu_Opening;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error initializing context menu: {ex.Message}");
+                loggingService.LogError("Error initializing context menu", ex);
                 throw;
+            }
+        }
+
+        private void ContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            UpdateMenuStatus();
+            UpdateKnownAPsMenu();
+        }
+
+        private void UpdateKnownAPsMenu()
+        {
+            try
+            {
+                knownAPsMenuItem.DropDownItems.Clear();
+
+                // Add root level APs
+                foreach (var bssid in knownAPManager.RootBssids)
+                {
+                    AddAPMenuItem(knownAPsMenuItem.DropDownItems, bssid, true);
+                }
+
+                if (knownAPManager.RootBssids.GetEnumerator().MoveNext())
+                {
+                    knownAPsMenuItem.DropDownItems.Add(new ToolStripSeparator());
+                }
+
+                // Add Unsorted submenu
+                var unsortedMenu = new ToolStripMenuItem("Unsorted");
+                foreach (var bssid in knownAPManager.UnsortedBssids)
+                {
+                    AddAPMenuItem(unsortedMenu.DropDownItems, bssid, false);
+                }
+                knownAPsMenuItem.DropDownItems.Add(unsortedMenu);
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error updating Known APs menu", ex);
+            }
+        }
+
+        private void AddAPMenuItem(ToolStripItemCollection collection, string bssid, bool isRoot)
+        {
+            var displayName = knownAPManager.GetDisplayName(bssid);
+            var item = new ToolStripMenuItem(displayName);
+
+            // Create submenu for AP options
+            var renameItem = new ToolStripMenuItem("Rename");
+            renameItem.Click += (s, e) => RenameAP(bssid);
+
+            var moveItem = new ToolStripMenuItem(isRoot ? "Move to Unsorted" : "Move to Root");
+            moveItem.Click += (s, e) => knownAPManager.SetAPRoot(bssid, !isRoot);
+
+            var deleteItem = new ToolStripMenuItem("Delete");
+            deleteItem.Click += (s, e) => DeleteAP(bssid);
+
+            item.DropDownItems.AddRange(new ToolStripItem[]
+            {
+                renameItem,
+                moveItem,
+                new ToolStripSeparator(),
+                deleteItem
+            });
+
+            collection.Add(item);
+        }
+
+        private void RenameAP(string bssid)
+        {
+            try
+            {
+                using (var dialog = new Form())
+                {
+                    dialog.Text = "Rename Access Point";
+                    dialog.StartPosition = FormStartPosition.CenterScreen;
+                    dialog.Width = 300;
+                    dialog.Height = 150;
+                    dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                    dialog.MaximizeBox = false;
+                    dialog.MinimizeBox = false;
+
+                    var label = new Label
+                    {
+                        Text = "Enter new name:",
+                        Left = 10,
+                        Top = 20,
+                        Width = 270
+                    };
+
+                    var textBox = new TextBox
+                    {
+                        Text = knownAPManager.GetDisplayName(bssid),
+                        Left = 10,
+                        Top = 40,
+                        Width = 270
+                    };
+
+                    var button = new Button
+                    {
+                        Text = "OK",
+                        DialogResult = DialogResult.OK,
+                        Left = 105,
+                        Top = 70,
+                        Width = 75
+                    };
+
+                    dialog.Controls.AddRange(new Control[] { label, textBox, button });
+                    dialog.AcceptButton = button;
+
+                    if (dialog.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(textBox.Text))
+                    {
+                        knownAPManager.RenameAP(bssid, textBox.Text);
+                        if (bssid == currentBSSID)
+                        {
+                            UpdateCurrentAP(bssid);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError($"Error renaming AP {bssid}", ex);
+                MessageBox.Show("Failed to rename access point.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void DeleteAP(string bssid)
+        {
+            try
+            {
+                var result = MessageBox.Show(
+                    "Are you sure you want to delete this access point?",
+                    "Confirm Delete",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question
+                );
+
+                if (result == DialogResult.Yes)
+                {
+                    knownAPManager.DeleteAP(bssid);
+                }
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError($"Error deleting AP {bssid}", ex);
+                MessageBox.Show("Failed to delete access point.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -113,7 +279,8 @@ namespace ping_applet.UI
                 if (contextMenu?.Items.Count > 0)
                 {
                     // Update version info
-                    if (contextMenu.Items[0] is ToolStripMenuItem statusItem)
+                    var statusItem = contextMenu.Items[3] as ToolStripMenuItem;
+                    if (statusItem != null)
                     {
                         statusItem.Text = $"Version {buildInfoProvider.VersionString}";
                         statusItem.DropDownItems.Clear();
@@ -125,7 +292,8 @@ namespace ping_applet.UI
                     }
 
                     // Update network state info
-                    if (contextMenu.Items[2] is ToolStripMenuItem networkStateItem)
+                    var networkStateItem = contextMenu.Items[5] as ToolStripMenuItem;
+                    if (networkStateItem != null)
                     {
                         var stateText = currentTransitionState ? "AP Change in Progress" :
                                       currentErrorState ? "Error State" : "Normal Operation";
@@ -146,7 +314,39 @@ namespace ping_applet.UI
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error updating menu status: {ex.Message}");
+                loggingService.LogError("Error updating menu status", ex);
+            }
+        }
+
+        public void UpdateCurrentAP(string bssid)
+        {
+            if (isDisposed) return;
+
+            try
+            {
+                currentBSSID = bssid;
+                if (!string.IsNullOrEmpty(bssid))
+                {
+                    if (!knownAPManager.GetDisplayName(bssid).Equals(bssid))
+                    {
+                        // AP is already known
+                        currentAPMenuItem.Text = $"AP: {knownAPManager.GetDisplayName(bssid)}";
+                    }
+                    else
+                    {
+                        // New AP, add to unsorted
+                        knownAPManager.AddNewAP(bssid);
+                        currentAPMenuItem.Text = $"AP: {bssid}";
+                    }
+                }
+                else
+                {
+                    currentAPMenuItem.Text = "AP: Not Connected";
+                }
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error updating current AP", ex);
             }
         }
 
@@ -248,7 +448,7 @@ namespace ping_applet.UI
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error updating icon: {ex.Message}");
+                loggingService.LogError("Error updating icon", ex);
                 newIcon?.Dispose();
                 throw;
             }
@@ -268,6 +468,7 @@ namespace ping_applet.UI
                 trayIcon.Dispose();
                 contextMenu.Dispose();
                 iconGenerator.Dispose();
+                knownAPManager.Dispose();
                 isDisposed = true;
             }
         }

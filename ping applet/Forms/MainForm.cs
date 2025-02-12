@@ -53,7 +53,7 @@ namespace ping_applet
                 var loggingService = new LoggingService(LogPath);
                 var networkMonitor = new NetworkMonitor();
                 var pingService = new PingService();
-                var trayIconManager = new TrayIconManager(buildInfoProvider);
+                var trayIconManager = new TrayIconManager(buildInfoProvider, loggingService);
 
                 appController = new AppController(networkMonitor, pingService, loggingService, trayIconManager);
                 appController.ApplicationExit += AppController_ApplicationExit;

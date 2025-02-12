@@ -213,7 +213,9 @@ namespace ping_applet.Controllers
                 return $"GW: {gwText}";
             }
 
-            return $"GW: {gwText}\nAP: {bssid}";
+            // Get the display name from TrayIconManager (which uses KnownAPManager)
+            var apDisplay = trayIconManager.GetAPDisplayName(bssid);
+            return $"GW: {gwText}\nAP: {apDisplay}";
         }
 
         protected virtual void Dispose(bool disposing)

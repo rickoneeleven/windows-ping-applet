@@ -388,6 +388,24 @@ namespace ping_applet.UI
             }
         }
 
+        /// <summary>
+        /// Gets the display name for an AP (custom name if configured, otherwise BSSID)
+        /// </summary>
+        public string GetAPDisplayName(string bssid)
+        {
+            if (isDisposed) return bssid;
+
+            try
+            {
+                return knownAPManager.GetDisplayName(bssid);
+            }
+            catch (Exception ex)
+            {
+                loggingService.LogError("Error getting AP display name", ex);
+                return bssid;
+            }
+        }
+
         protected virtual void Dispose(bool disposing)
         {
             if (!isDisposed && disposing)

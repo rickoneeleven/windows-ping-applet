@@ -89,9 +89,10 @@ namespace ping_applet.Controllers
 
                 if (!string.IsNullOrEmpty(currentDisplayText))
                 {
+                    string tooltipText = FormatTooltip(networkMonitor.CurrentGateway, newBssid);
                     trayIconManager.UpdateIcon(
                         currentDisplayText,
-                        $"Access Point Change - BSSID: {newBssid}",
+                        tooltipText,
                         false,
                         true,
                         true  // Use black text during transition
@@ -154,7 +155,7 @@ namespace ping_applet.Controllers
                 if (reply.Status == IPStatus.Success)
                 {
                     string displayText = reply.RoundtripTime.ToString();
-                    string tooltipText = $"{networkMonitor.CurrentGateway}: {reply.RoundtripTime}ms";
+                    string tooltipText = FormatTooltip(networkMonitor.CurrentGateway, networkStateManager.CurrentBssid);
                     currentDisplayText = displayText;
 
                     trayIconManager.UpdateIcon(
@@ -172,7 +173,7 @@ namespace ping_applet.Controllers
                 }
                 else
                 {
-                    string tooltipText = $"{networkMonitor.CurrentGateway}: Failed";
+                    string tooltipText = FormatTooltip(networkMonitor.CurrentGateway, networkStateManager.CurrentBssid);
                     trayIconManager.UpdateIcon("X", tooltipText, true, false, false);
                     loggingService.LogInfo($"Ping failed - Gateway: {networkMonitor.CurrentGateway}, Status: {reply.Status}");
                 }
@@ -194,13 +195,25 @@ namespace ping_applet.Controllers
         {
             try
             {
-                string tooltipText = $"Error: {errorText}";
+                string tooltipText = FormatTooltip(networkMonitor.CurrentGateway, networkStateManager.CurrentBssid);
                 trayIconManager.UpdateIcon(errorText, tooltipText, true, false, false);
             }
             catch (Exception ex)
             {
                 loggingService.LogError("Error state display failed", ex);
             }
+        }
+
+        private string FormatTooltip(string gateway, string bssid)
+        {
+            var gwText = string.IsNullOrEmpty(gateway) ? "Not Connected" : gateway;
+
+            if (string.IsNullOrEmpty(bssid))
+            {
+                return $"GW: {gwText}";
+            }
+
+            return $"GW: {gwText}\nAP: {bssid}";
         }
 
         protected virtual void Dispose(bool disposing)

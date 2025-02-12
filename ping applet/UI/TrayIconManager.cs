@@ -65,7 +65,7 @@ namespace ping_applet.UI
             try
             {
                 // Add current AP display
-                currentAPMenuItem = new ToolStripMenuItem("AP: Not Connected")
+                currentAPMenuItem = new ToolStripMenuItem("AP: not on wireless")
                 {
                     Enabled = false
                 };

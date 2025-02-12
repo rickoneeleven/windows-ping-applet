@@ -41,7 +41,7 @@ namespace ping_applet.Services
             {
                 _loggingService.LogInfo("Starting network state monitoring");
 
-                // Initial state check
+                // Perform initial state check immediately
                 await CheckNetworkState();
 
                 // Start periodic monitoring
@@ -74,6 +74,7 @@ namespace ping_applet.Services
                         _currentBssid = null;
                         _currentChannel = 0;
                         _currentBand = null;
+                        BssidChanged?.Invoke(this, null);
                     }
                     return;
                 }
@@ -81,32 +82,28 @@ namespace ping_applet.Services
                 // Handle BSSID changes
                 if (bssid != _currentBssid)
                 {
+                    var oldBssid = _currentBssid ?? "none";
+                    var oldChannel = _currentChannel;
+                    var oldBand = _currentBand ?? "unknown";
+
+                    _currentBssid = bssid;
+                    _currentChannel = channel;
+                    _currentBand = band;
+
                     if (_isInitialCheck)
                     {
-                        _currentBssid = bssid;
-                        _currentChannel = channel;
-                        _currentBand = band;
                         _loggingService.LogInfo($"Initial connection - BSSID: {bssid}, Channel: {channel}, Band: {band}");
                         _isInitialCheck = false;
                     }
                     else
                     {
-                        var oldBssid = _currentBssid ?? "none";
-                        var oldChannel = _currentChannel;
-                        var oldBand = _currentBand ?? "unknown";
-
-                        _currentBssid = bssid;
-                        _currentChannel = channel;
-                        _currentBand = band;
-
                         _loggingService.LogInfo(
                             $"Network transition detected:\n" +
                             $"  From: BSSID={oldBssid}, Channel={oldChannel}, Band={oldBand}\n" +
                             $"  To: BSSID={bssid}, Channel={channel}, Band={band}"
                         );
-
-                        BssidChanged?.Invoke(this, bssid);
                     }
+                    BssidChanged?.Invoke(this, bssid);
                 }
                 // Handle signal strength changes
                 else if (Math.Abs(signalStrength - _currentSignalStrength) > 5)
@@ -129,6 +126,12 @@ namespace ping_applet.Services
                     );
                     _currentChannel = channel;
                     _currentBand = band;
+                }
+
+                // Always invoke BssidChanged on the initial check to update UI
+                if (_isInitialCheck)
+                {
+                    BssidChanged?.Invoke(this, bssid);
                 }
             }
             catch (Exception ex)

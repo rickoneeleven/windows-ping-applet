@@ -33,7 +33,7 @@ namespace ping_applet.Services
             StartMonitoring();
         }
 
-        public Task<bool> UpdateGateway()
+        public Task<bool> UpdateGateway(bool forceUpdate = false)
         {
             if (isDisposed)
                 throw new ObjectDisposedException(nameof(NetworkMonitor));
@@ -42,7 +42,15 @@ namespace ping_applet.Services
             {
                 string newGateway = GetDefaultGateway();
 
-                if (newGateway != currentGateway)
+                // If forcing update, trigger event even if gateway hasn't changed
+                if (forceUpdate)
+                {
+                    currentGateway = newGateway;
+                    GatewayChanged?.Invoke(this, currentGateway);
+                    return Task.FromResult(true);
+                }
+                // Normal update - only trigger if gateway changed
+                else if (newGateway != currentGateway)
                 {
                     currentGateway = newGateway;
                     GatewayChanged?.Invoke(this, currentGateway);
@@ -130,7 +138,7 @@ namespace ping_applet.Services
                 {
                     // Add a small delay to allow network stack to stabilize
                     await Task.Delay(1000);
-                    await UpdateGateway();
+                    await UpdateGateway(forceUpdate: true); // Force update when network becomes available
                 }
             }
         }

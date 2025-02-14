@@ -32,14 +32,15 @@ namespace ping_applet.Controllers
 
         public AppController(
             INetworkMonitor networkMonitor,
-            IPingService pingService,
             ILoggingService loggingService,
             TrayIconManager trayIconManager)
         {
             this.networkMonitor = networkMonitor ?? throw new ArgumentNullException(nameof(networkMonitor));
-            this.pingService = pingService ?? throw new ArgumentNullException(nameof(pingService));
             this.loggingService = loggingService ?? throw new ArgumentNullException(nameof(loggingService));
             this.trayIconManager = trayIconManager ?? throw new ArgumentNullException(nameof(trayIconManager));
+
+            // Create PingService with networkMonitor dependency
+            this.pingService = new PingService(networkMonitor);
 
             this.networkStateManager = new NetworkStateManager(loggingService);
 

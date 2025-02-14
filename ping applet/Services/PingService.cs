@@ -10,24 +10,64 @@ namespace ping_applet.Services
     {
         private readonly object pingLock = new object();
         private Timer pingTimer;
+        private Timer retryTimer;
         private bool isDisposed;
         private volatile bool isPinging;
         private string currentAddress;
         private readonly byte[] buffer = new byte[32];
         private readonly PingOptions options;
+        private int consecutiveFailures;
+        private readonly INetworkMonitor networkMonitor;
+
+        private const int MAX_CONSECUTIVE_FAILURES = 5;
+        private const int RETRY_INTERVAL = 10000; // 10 seconds
 
         public event EventHandler<PingReply> PingCompleted;
         public event EventHandler<Exception> PingError;
 
         public bool IsPinging => isPinging;
 
-        public PingService()
+        public PingService(INetworkMonitor networkMonitor)
         {
+            this.networkMonitor = networkMonitor ?? throw new ArgumentNullException(nameof(networkMonitor));
+
             options = new PingOptions
             {
                 DontFragment = false,
                 Ttl = 128
             };
+
+            InitializeRetryTimer();
+        }
+
+        private void InitializeRetryTimer()
+        {
+            retryTimer = new Timer(RETRY_INTERVAL);
+            retryTimer.AutoReset = true;
+            retryTimer.Elapsed += async (s, e) => await HandleRetryTimerElapsed();
+        }
+
+        private async Task HandleRetryTimerElapsed()
+        {
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
+            {
+                // Force a gateway refresh
+                if (await networkMonitor.UpdateGateway())
+                {
+                    // If gateway changed, reset our state
+                    ResetPingState();
+                }
+            }
+        }
+
+        private void ResetPingState()
+        {
+            lock (pingLock)
+            {
+                isPinging = false;
+                consecutiveFailures = 0;
+                currentAddress = networkMonitor.CurrentGateway;
+            }
         }
 
         public async Task SendPingAsync(string address, int timeout)
@@ -52,16 +92,24 @@ namespace ping_applet.Services
                     try
                     {
                         var reply = await ping.SendPingAsync(address, timeout, buffer, options);
+
                         if (!isDisposed)
                         {
-                            PingCompleted?.Invoke(this, reply);
+                            if (reply.Status == IPStatus.Success)
+                            {
+                                HandlePingSuccess(reply);
+                            }
+                            else
+                            {
+                                HandlePingFailure(reply);
+                            }
                         }
                     }
                     catch (PingException pex)
                     {
                         if (!isDisposed)
                         {
-                            PingError?.Invoke(this, pex);
+                            HandlePingError(pex);
                         }
                     }
                 }
@@ -70,7 +118,7 @@ namespace ping_applet.Services
             {
                 if (!isDisposed)
                 {
-                    PingError?.Invoke(this, ex);
+                    HandlePingError(ex);
                 }
             }
             finally
@@ -79,19 +127,57 @@ namespace ping_applet.Services
             }
         }
 
+        private void HandlePingSuccess(PingReply reply)
+        {
+            consecutiveFailures = 0;
+            retryTimer.Stop();
+            PingCompleted?.Invoke(this, reply);
+        }
+
+        private void HandlePingFailure(PingReply reply)
+        {
+            consecutiveFailures++;
+            PingCompleted?.Invoke(this, reply);
+
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
+            {
+                // Start retry timer if not already running
+                if (!retryTimer.Enabled)
+                {
+                    retryTimer.Start();
+                }
+            }
+        }
+
+        private void HandlePingError(Exception ex)
+        {
+            consecutiveFailures++;
+            PingError?.Invoke(this, ex);
+
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
+            {
+                if (!retryTimer.Enabled)
+                {
+                    retryTimer.Start();
+                }
+            }
+        }
+
         public void StartPingTimer(int interval)
         {
             if (isDisposed) throw new ObjectDisposedException(nameof(PingService));
             if (interval <= 0) throw new ArgumentOutOfRangeException(nameof(interval));
 
-            StopPingTimer(); // Ensure any existing timer is stopped
+            StopPingTimer();
 
             pingTimer = new Timer(interval);
             pingTimer.Elapsed += async (sender, e) =>
             {
-                if (!string.IsNullOrEmpty(currentAddress))
+                // Always use the latest gateway address
+                string latestGateway = networkMonitor.CurrentGateway;
+                if (!string.IsNullOrEmpty(latestGateway))
                 {
-                    await SendPingAsync(currentAddress, interval);
+                    await SendPingAsync(latestGateway, interval);
                 }
             };
             pingTimer.Start();
@@ -112,6 +198,8 @@ namespace ping_applet.Services
             if (!isDisposed && disposing)
             {
                 StopPingTimer();
+                retryTimer?.Stop();
+                retryTimer?.Dispose();
                 isDisposed = true;
             }
         }

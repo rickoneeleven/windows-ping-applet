@@ -113,19 +113,25 @@ namespace ping_applet.Services
             }
         }
 
-        private async void NetworkAddressChanged(object sender, EventArgs e)
+        private void NetworkAddressChanged(object sender, EventArgs e)
         {
-            if (!isDisposed)
-            {
-                await UpdateGateway();
-            }
+            // We no longer automatically update the gateway on every network address change
+            // This helps prevent false negatives during SSID transitions
         }
 
-        private void NetworkAvailabilityChangedHandler(object sender, NetworkAvailabilityEventArgs e)
+        private async void NetworkAvailabilityChangedHandler(object sender, NetworkAvailabilityEventArgs e)
         {
             if (!isDisposed)
             {
                 NetworkAvailabilityChanged?.Invoke(this, e.IsAvailable);
+
+                // Only update the gateway when network becomes available
+                if (e.IsAvailable)
+                {
+                    // Add a small delay to allow network stack to stabilize
+                    await Task.Delay(1000);
+                    await UpdateGateway();
+                }
             }
         }
 

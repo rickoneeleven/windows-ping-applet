@@ -2,8 +2,10 @@
 using System.Drawing;
 using System.Windows.Forms;
 using System.Diagnostics;
+using System.Linq;
 using ping_applet.Core.Interfaces;
 using ping_applet.Utils;
+using System.Collections.Generic;
 
 namespace ping_applet.UI
 {
@@ -252,24 +254,57 @@ namespace ping_applet.UI
             {
                 knownAPsMenuItem.DropDownItems.Clear();
 
-                // Add root level APs
-                foreach (var bssid in knownAPManager.RootBssids)
+                // Get all known BSSIDs
+                var allBssids = knownAPManager.RootBssids.Concat(knownAPManager.UnsortedBssids).Distinct();
+
+                // Create lists for named and unnamed APs
+                var namedAPs = new List<(string bssid, string name)>();
+                var unnamedAPs = new List<string>();
+
+                // Classify APs based on whether they have a custom name
+                foreach (var bssid in allBssids)
                 {
-                    AddAPMenuItem(knownAPsMenuItem.DropDownItems, bssid, true);
+                    var displayName = knownAPManager.GetDisplayName(bssid);
+
+                    // If the display name is different from the BSSID, it has a custom name
+                    if (displayName != bssid)
+                    {
+                        namedAPs.Add((bssid, displayName));
+                    }
+                    else
+                    {
+                        unnamedAPs.Add(bssid);
+                    }
                 }
 
-                if (knownAPManager.RootBssids.GetEnumerator().MoveNext())
+                // Sort the named APs alphabetically (numbers first, then characters)
+                namedAPs = namedAPs
+                    .OrderBy(ap => !char.IsDigit(ap.name.FirstOrDefault())) // Numbers first
+                    .ThenBy(ap => ap.name) // Then alphabetically
+                    .ToList();
+
+                // Add the named APs to the root menu
+                foreach (var (bssid, _) in namedAPs)
+                {
+                    AddAPMenuItem(knownAPsMenuItem.DropDownItems, bssid);
+                }
+
+                // Add a separator if there are both named and unnamed APs
+                if (namedAPs.Any() && unnamedAPs.Any())
                 {
                     knownAPsMenuItem.DropDownItems.Add(new ToolStripSeparator());
                 }
 
                 // Add Unsorted submenu
-                var unsortedMenu = new ToolStripMenuItem("Unsorted");
-                foreach (var bssid in knownAPManager.UnsortedBssids)
+                if (unnamedAPs.Any())
                 {
-                    AddAPMenuItem(unsortedMenu.DropDownItems, bssid, false);
+                    var unsortedMenu = new ToolStripMenuItem("Unsorted");
+                    foreach (var bssid in unnamedAPs)
+                    {
+                        AddAPMenuItem(unsortedMenu.DropDownItems, bssid);
+                    }
+                    knownAPsMenuItem.DropDownItems.Add(unsortedMenu);
                 }
-                knownAPsMenuItem.DropDownItems.Add(unsortedMenu);
             }
             catch (Exception ex)
             {
@@ -277,7 +312,7 @@ namespace ping_applet.UI
             }
         }
 
-        private void AddAPMenuItem(ToolStripItemCollection collection, string bssid, bool isRoot)
+        private void AddAPMenuItem(ToolStripItemCollection collection, string bssid)
         {
             var displayName = knownAPManager.GetDisplayName(bssid);
             var item = new ToolStripMenuItem(displayName);
@@ -285,16 +320,12 @@ namespace ping_applet.UI
             var renameItem = new ToolStripMenuItem("Rename");
             renameItem.Click += (s, e) => RenameAP(bssid);
 
-            var moveItem = new ToolStripMenuItem(isRoot ? "Move to Unsorted" : "Move to Root");
-            moveItem.Click += (s, e) => knownAPManager.SetAPRoot(bssid, !isRoot);
-
             var deleteItem = new ToolStripMenuItem("Delete");
             deleteItem.Click += (s, e) => DeleteAP(bssid);
 
             item.DropDownItems.AddRange(new ToolStripItem[]
             {
                 renameItem,
-                moveItem,
                 new ToolStripSeparator(),
                 deleteItem
             });

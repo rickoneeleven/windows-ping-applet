@@ -15,6 +15,7 @@ namespace ping_applet.Utils
         private readonly ILoggingService _loggingService;
         private readonly string _settingsPath;
         private readonly Dictionary<string, string> _bssidToName;
+        private readonly Dictionary<string, APDetails> _bssidToDetails; // New - stores additional AP details
         private readonly HashSet<string> _rootBssids;
         private readonly object _lockObject = new object();
         private bool _isDisposed;
@@ -33,6 +34,7 @@ namespace ping_applet.Utils
                 "known_aps.json"
             );
             _bssidToName = new Dictionary<string, string>();
+            _bssidToDetails = new Dictionary<string, APDetails>();
             _rootBssids = new HashSet<string>();
             settings = new StoredSettings();
 
@@ -119,6 +121,7 @@ namespace ping_applet.Utils
                     if (!_bssidToName.ContainsKey(bssid))
                     {
                         _bssidToName[bssid] = bssid; // Default name is the BSSID itself
+                        _bssidToDetails[bssid] = new APDetails(); // Initialize with empty details
                         SaveSettings();
                         _loggingService.LogInfo($"Added new AP: {bssid}");
                     }
@@ -128,6 +131,60 @@ namespace ping_applet.Utils
             {
                 _loggingService.LogError($"Failed to add new AP: {bssid}", ex);
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Updates the network details for an AP
+        /// </summary>
+        public void UpdateAPDetails(string bssid, string band, string ssid)
+        {
+            ThrowIfDisposed();
+            if (string.IsNullOrEmpty(bssid))
+                throw new ArgumentNullException(nameof(bssid));
+
+            try
+            {
+                lock (_lockObject)
+                {
+                    // Ensure the AP exists in our dictionary
+                    if (!_bssidToName.ContainsKey(bssid))
+                    {
+                        AddNewAP(bssid);
+                    }
+
+                    // Create or update details
+                    if (!_bssidToDetails.TryGetValue(bssid, out var details))
+                    {
+                        details = new APDetails();
+                        _bssidToDetails[bssid] = details;
+                    }
+
+                    // Only update if we have valid data
+                    bool updated = false;
+                    if (!string.IsNullOrEmpty(band) && details.Band != band)
+                    {
+                        details.Band = band;
+                        updated = true;
+                    }
+
+                    if (!string.IsNullOrEmpty(ssid) && details.SSID != ssid)
+                    {
+                        details.SSID = ssid;
+                        updated = true;
+                    }
+
+                    if (updated)
+                    {
+                        _loggingService.LogInfo($"Updated details for AP {bssid}: Band={band}, SSID={ssid}");
+                        SaveSettings();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogError($"Failed to update details for AP {bssid}", ex);
+                // Don't throw - this is a non-critical operation
             }
         }
 
@@ -217,6 +274,7 @@ namespace ping_applet.Utils
                 lock (_lockObject)
                 {
                     _bssidToName.Remove(bssid);
+                    _bssidToDetails.Remove(bssid);
                     _rootBssids.Remove(bssid);
                     SaveSettings();
                     _loggingService.LogInfo($"Deleted AP: {bssid}");
@@ -230,26 +288,59 @@ namespace ping_applet.Utils
         }
 
         /// <summary>
-        /// Gets the display name for a BSSID
+        /// Gets the display name for a BSSID, with optional network details
         /// </summary>
-        public string GetDisplayName(string bssid)
+        public string GetDisplayName(string bssid, bool includeDetails = true)
         {
             ThrowIfDisposed();
             if (string.IsNullOrEmpty(bssid))
-                throw new ArgumentNullException(nameof(bssid));
+                return "Not Connected";
 
             try
             {
                 lock (_lockObject)
                 {
-                    return _bssidToName.TryGetValue(bssid, out string name) ? name : bssid;
+                    // Get the base name (custom or BSSID)
+                    string baseName = _bssidToName.TryGetValue(bssid, out string name) ? name : bssid;
+
+                    // If we're not including details or no details exist, return just the name
+                    if (!includeDetails || !_bssidToDetails.TryGetValue(bssid, out var details))
+                        return baseName;
+
+                    // Build the formatted name with network details
+                    return FormatDisplayName(baseName, details);
                 }
             }
             catch (Exception ex)
             {
                 _loggingService.LogError($"Failed to get display name for AP: {bssid}", ex);
-                throw;
+                return bssid; // Fallback to BSSID on error
             }
+        }
+
+        /// <summary>
+        /// Formats the display name with network details
+        /// </summary>
+        private string FormatDisplayName(string baseName, APDetails details)
+        {
+            // If we don't have any details, just return the base name
+            if (string.IsNullOrEmpty(details.Band) && string.IsNullOrEmpty(details.SSID))
+                return baseName;
+
+            // Build details string
+            string detailsStr = "";
+            if (!string.IsNullOrEmpty(details.Band))
+                detailsStr += details.Band;
+
+            if (!string.IsNullOrEmpty(details.SSID))
+            {
+                if (!string.IsNullOrEmpty(detailsStr))
+                    detailsStr += " - ";
+                detailsStr += details.SSID;
+            }
+
+            // Return formatted name
+            return $"{baseName} ({detailsStr})";
         }
 
         private void LoadSettings()
@@ -267,6 +358,12 @@ namespace ping_applet.Utils
                         foreach (var kvp in settings.BssidToName)
                         {
                             _bssidToName[kvp.Key] = kvp.Value;
+                        }
+
+                        _bssidToDetails.Clear();
+                        foreach (var kvp in settings.BssidToDetails ?? new Dictionary<string, APDetails>())
+                        {
+                            _bssidToDetails[kvp.Key] = kvp.Value;
                         }
 
                         _rootBssids.Clear();
@@ -293,6 +390,7 @@ namespace ping_applet.Utils
                 var settingsToSave = new StoredSettings
                 {
                     BssidToName = new Dictionary<string, string>(_bssidToName),
+                    BssidToDetails = new Dictionary<string, APDetails>(_bssidToDetails),
                     RootBssids = _rootBssids.ToList(),
                     NotificationsEnabled = settings.NotificationsEnabled
                 };
@@ -337,9 +435,19 @@ namespace ping_applet.Utils
             GC.SuppressFinalize(this);
         }
 
+        /// <summary>
+        /// Class to store additional details about an AP
+        /// </summary>
+        public class APDetails
+        {
+            public string Band { get; set; }
+            public string SSID { get; set; }
+        }
+
         private class StoredSettings
         {
             public Dictionary<string, string> BssidToName { get; set; } = new Dictionary<string, string>();
+            public Dictionary<string, APDetails> BssidToDetails { get; set; } = new Dictionary<string, APDetails>();
             public List<string> RootBssids { get; set; } = new List<string>();
             public bool NotificationsEnabled { get; set; } = true;
         }

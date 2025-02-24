@@ -26,6 +26,8 @@ namespace ping_applet.UI
         private bool currentTransitionState;
         private bool currentUseBlackText;
         private string currentBSSID;
+        private string currentBand;
+        private string currentSSID;
 
         public event EventHandler QuitRequested;
 
@@ -81,26 +83,33 @@ namespace ping_applet.UI
             notificationManager.ShowTransitionNotification(oldBssid, newBssid, oldDisplayName, newDisplayName);
         }
 
-        public void UpdateCurrentAP(string bssid)
+        public void UpdateCurrentAP(string bssid, string band = null, string ssid = null)
         {
             if (isDisposed) return;
 
             try
             {
                 currentBSSID = bssid;
-                string displayName;
+                currentBand = band;
+                currentSSID = ssid;
+                string displayName = null;
 
                 if (!string.IsNullOrEmpty(bssid))
                 {
+                    // Update AP details in the KnownAPManager if we have band or SSID info
+                    if (!string.IsNullOrEmpty(band) || !string.IsNullOrEmpty(ssid))
+                    {
+                        knownAPManager.UpdateAPDetails(bssid, band, ssid);
+                    }
+
+                    // Get the display name with network details
                     displayName = knownAPManager.GetDisplayName(bssid);
+
+                    // If this is a new AP (display name is just the BSSID), add it to our known list
                     if (displayName.Equals(bssid))
                     {
                         knownAPManager.AddNewAP(bssid);
                     }
-                }
-                else
-                {
-                    displayName = null;
                 }
 
                 menuManager.UpdateCurrentAP(displayName);

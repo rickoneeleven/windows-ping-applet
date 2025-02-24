@@ -16,6 +16,7 @@ namespace ping_applet.Services
         private int _currentSignalStrength;
         private int _currentChannel;
         private string _currentBand;
+        private string _currentSsid; // Added to track SSID name
         private bool _isDisposed;
         private bool _isInitialCheck = true;
         private bool _isLocationServicesEnabled = true;
@@ -31,6 +32,7 @@ namespace ping_applet.Services
         public int CurrentSignalStrength => _currentSignalStrength;
         public int CurrentChannel => _currentChannel;
         public string CurrentBand => _currentBand;
+        public string CurrentSsid => _currentSsid; // Added property for SSID
 
         public NetworkStateManager(ILoggingService loggingService)
         {
@@ -69,7 +71,7 @@ namespace ping_applet.Services
 
             try
             {
-                var (bssid, signalStrength, channel, band) = await GetWifiInfo();
+                var (bssid, signalStrength, channel, band, ssid) = await GetWifiInfo();
 
                 if (string.IsNullOrEmpty(bssid))
                 {
@@ -80,6 +82,7 @@ namespace ping_applet.Services
                         _currentBssid = null;
                         _currentChannel = 0;
                         _currentBand = null;
+                        _currentSsid = null; // Clear SSID
                         BssidChanged?.Invoke(this, new BssidChangeEventArgs(_previousBssid, null));
                     }
                     return;
@@ -92,22 +95,24 @@ namespace ping_applet.Services
                     var oldBssid = _currentBssid ?? "none";
                     var oldChannel = _currentChannel;
                     var oldBand = _currentBand ?? "unknown";
+                    var oldSsid = _currentSsid ?? "unknown";
 
                     _currentBssid = bssid;
                     _currentChannel = channel;
                     _currentBand = band;
+                    _currentSsid = ssid;
 
                     if (_isInitialCheck)
                     {
-                        _loggingService.LogInfo($"Initial connection - BSSID: {bssid}, Channel: {channel}, Band: {band}");
+                        _loggingService.LogInfo($"Initial connection - BSSID: {bssid}, Channel: {channel}, Band: {band}, SSID: {ssid}");
                         _isInitialCheck = false;
                     }
                     else
                     {
                         _loggingService.LogInfo(
                             $"Network transition detected:\n" +
-                            $"  From: BSSID={oldBssid}, Channel={oldChannel}, Band={oldBand}\n" +
-                            $"  To: BSSID={bssid}, Channel={channel}, Band={band}"
+                            $"  From: BSSID={oldBssid}, Channel={oldChannel}, Band={oldBand}, SSID={oldSsid}\n" +
+                            $"  To: BSSID={bssid}, Channel={channel}, Band={band}, SSID={ssid}"
                         );
                     }
                     BssidChanged?.Invoke(this, new BssidChangeEventArgs(_previousBssid, bssid));
@@ -119,19 +124,21 @@ namespace ping_applet.Services
                     _currentSignalStrength = signalStrength;
                     _loggingService.LogInfo(
                         $"Signal strength changed from {oldStrength}% to {signalStrength}% " +
-                        $"(Channel: {channel}, Band: {band})"
+                        $"(Channel: {channel}, Band: {band}, SSID: {ssid})"
                     );
                     SignalStrengthChanged?.Invoke(this, signalStrength);
                 }
-                else if (channel != _currentChannel || band != _currentBand)
+                else if (channel != _currentChannel || band != _currentBand || ssid != _currentSsid)
                 {
+                    // Also track SSID changes
                     _loggingService.LogInfo(
-                        $"Channel/Band changed for BSSID {bssid}:\n" +
-                        $"  From: Channel={_currentChannel}, Band={_currentBand}\n" +
-                        $"  To: Channel={channel}, Band={band}"
+                        $"Network details changed for BSSID {bssid}:\n" +
+                        $"  From: Channel={_currentChannel}, Band={_currentBand}, SSID={_currentSsid}\n" +
+                        $"  To: Channel={channel}, Band={band}, SSID={ssid}"
                     );
                     _currentChannel = channel;
                     _currentBand = band;
+                    _currentSsid = ssid;
                 }
 
                 // Always invoke BssidChanged on the initial check to update UI
@@ -146,7 +153,7 @@ namespace ping_applet.Services
             }
         }
 
-        private async Task<(string bssid, int signalStrength, int channel, string band)> GetWifiInfo()
+        private async Task<(string bssid, int signalStrength, int channel, string band, string ssid)> GetWifiInfo()
         {
             if (_isDisposed) throw new ObjectDisposedException(nameof(NetworkStateManager));
 
@@ -186,7 +193,7 @@ namespace ping_applet.Services
                         {
                             _loggingService.LogError($"netsh command failed with exit code: {process.ExitCode}");
                         }
-                        return (null, 0, 0, null);
+                        return (null, 0, 0, null, null);
                     }
 
                     // If we got here successfully and location services were previously disabled,
@@ -209,23 +216,27 @@ namespace ping_applet.Services
                     var channelMatch = Regex.Match(output, @"Channel\s+:\s+(\d+)");
                     var bandMatch = Regex.Match(output, @"Band\s+:\s+(.+?)\r?\n");
 
+                    // Parse SSID
+                    var ssidMatch = Regex.Match(output, @"SSID\s+:\s+(.+?)\r?\n");
+
                     string bssid = bssidMatch.Success ? bssidMatch.Groups[1].Value : null;
                     int signalStrength = signalMatch.Success ? int.Parse(signalMatch.Groups[1].Value) : 0;
                     int channel = channelMatch.Success ? int.Parse(channelMatch.Groups[1].Value) : 0;
                     string band = bandMatch.Success ? bandMatch.Groups[1].Value.Trim() : null;
+                    string ssid = ssidMatch.Success ? ssidMatch.Groups[1].Value.Trim() : null;
 
                     if (!bssidMatch.Success)
                     {
                         _loggingService.LogInfo("No BSSID found in netsh output");
                     }
 
-                    return (bssid, signalStrength, channel, band);
+                    return (bssid, signalStrength, channel, band, ssid);
                 }
             }
             catch (Exception ex)
             {
                 _loggingService.LogError("Error getting WiFi info", ex);
-                return (null, 0, 0, null);
+                return (null, 0, 0, null, null);
             }
         }
 

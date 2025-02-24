@@ -107,8 +107,12 @@ namespace ping_applet.Controllers
                 bssidResetTimer.Stop();
                 bssidResetTimer.Start();
 
-                // Update the tray icon's current AP display
-                trayIconManager.UpdateCurrentAP(e.NewBssid);
+                // Update AP details and get enhanced display name
+                trayIconManager.UpdateCurrentAP(
+                    e.NewBssid,
+                    networkStateManager.CurrentBand,
+                    networkStateManager.CurrentSsid
+                );
 
                 // Show the transition balloon notification
                 trayIconManager.ShowTransitionBalloon(e.OldBssid, e.NewBssid);
@@ -152,7 +156,7 @@ namespace ping_applet.Controllers
             if (string.IsNullOrEmpty(newGateway))
             {
                 ShowErrorState("GW?");
-                trayIconManager.UpdateCurrentAP(null); // Clear current AP display
+                trayIconManager.UpdateCurrentAP(null, null, null); // Clear current AP display
                 loggingService.LogInfo("Gateway became unavailable");
             }
             else
@@ -167,7 +171,7 @@ namespace ping_applet.Controllers
             if (!isAvailable)
             {
                 loggingService.LogInfo("Network became unavailable");
-                trayIconManager.UpdateCurrentAP(null); // Clear current AP display
+                trayIconManager.UpdateCurrentAP(null, null, null); // Clear current AP display with null band and SSID
                 ShowErrorState("OFF");
             }
         }
@@ -263,5 +267,7 @@ namespace ping_applet.Controllers
             Dispose(true);
             GC.SuppressFinalize(this);
         }
+
     }
+
 }

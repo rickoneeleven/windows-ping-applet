@@ -264,10 +264,12 @@ namespace ping_applet.UI
                 // Classify APs based on whether they have a custom name
                 foreach (var bssid in allBssids)
                 {
-                    var displayName = knownAPManager.GetDisplayName(bssid);
+                    // Get the raw name without details to check for customization
+                    var rawName = knownAPManager.GetDisplayName(bssid, includeDetails: false);
+                    var displayName = knownAPManager.GetDisplayName(bssid); // Full display name with details
 
-                    // If the display name is different from the BSSID, it has a custom name
-                    if (displayName != bssid)
+                    // If the raw name is different from the BSSID, it has a custom name
+                    if (rawName != bssid)
                     {
                         namedAPs.Add((bssid, displayName));
                     }

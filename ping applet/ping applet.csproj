@@ -74,8 +74,11 @@
     <Compile Include="UI\MenuManager.cs" />
     <Compile Include="UI\NotificationManager.cs" />
     <Compile Include="UI\TrayIconManager.cs" />
+    <Compile Include="Utils\APDisplayFormatter.cs" />
+    <Compile Include="Utils\APSettingsStorage.cs" />
     <Compile Include="Utils\BuildInfoProvider.cs" />
     <Compile Include="Utils\KnownAPManager.cs" />
+    <Compile Include="Utils\Models\APModel.cs" />
     <Compile Include="Utils\StartupManager.cs" />
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>

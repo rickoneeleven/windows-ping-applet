@@ -1,9 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using Newtonsoft.Json;
 using ping_applet.Core.Interfaces;
+using ping_applet.Utils.Models;
 
 namespace ping_applet.Utils
 {
@@ -13,13 +12,13 @@ namespace ping_applet.Utils
     public class KnownAPManager : IDisposable
     {
         private readonly ILoggingService _loggingService;
-        private readonly string _settingsPath;
+        private readonly APSettingsStorage _settingsStorage;
+        private readonly APDisplayFormatter _displayFormatter;
         private readonly Dictionary<string, string> _bssidToName;
-        private readonly Dictionary<string, APDetails> _bssidToDetails; // New - stores additional AP details
+        private readonly Dictionary<string, APDetails> _bssidToDetails;
         private readonly HashSet<string> _rootBssids;
-        private readonly object _lockObject = new object();
+        private APSettings _settings;
         private bool _isDisposed;
-        private StoredSettings settings;
 
         /// <summary>
         /// Initializes a new instance of the KnownAPManager class
@@ -28,15 +27,12 @@ namespace ping_applet.Utils
         public KnownAPManager(ILoggingService loggingService)
         {
             _loggingService = loggingService ?? throw new ArgumentNullException(nameof(loggingService));
-            _settingsPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "PingApplet",
-                "known_aps.json"
-            );
+            _settingsStorage = new APSettingsStorage(loggingService);
+            _displayFormatter = new APDisplayFormatter();
             _bssidToName = new Dictionary<string, string>();
             _bssidToDetails = new Dictionary<string, APDetails>();
             _rootBssids = new HashSet<string>();
-            settings = new StoredSettings();
+            _settings = new APSettings();
 
             try
             {
@@ -58,10 +54,7 @@ namespace ping_applet.Utils
             get
             {
                 ThrowIfDisposed();
-                lock (_lockObject)
-                {
-                    return _rootBssids.ToList();
-                }
+                return _rootBssids.ToList();
             }
         }
 
@@ -73,10 +66,7 @@ namespace ping_applet.Utils
             get
             {
                 ThrowIfDisposed();
-                lock (_lockObject)
-                {
-                    return _bssidToName.Keys.Except(_rootBssids).ToList();
-                }
+                return _bssidToName.Keys.Except(_rootBssids).ToList();
             }
         }
 
@@ -86,10 +76,7 @@ namespace ping_applet.Utils
         public bool GetNotificationsEnabled()
         {
             ThrowIfDisposed();
-            lock (_lockObject)
-            {
-                return settings.NotificationsEnabled;
-            }
+            return _settings.NotificationsEnabled;
         }
 
         /// <summary>
@@ -98,10 +85,16 @@ namespace ping_applet.Utils
         public void SetNotificationsEnabled(bool enabled)
         {
             ThrowIfDisposed();
-            lock (_lockObject)
+            try
             {
-                settings.NotificationsEnabled = enabled;
+                _settings.NotificationsEnabled = enabled;
                 SaveSettings();
+                _loggingService.LogInfo($"Notifications {(enabled ? "enabled" : "disabled")}");
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogError("Failed to set notifications state", ex);
+                throw;
             }
         }
 
@@ -116,15 +109,12 @@ namespace ping_applet.Utils
 
             try
             {
-                lock (_lockObject)
+                if (!_bssidToName.ContainsKey(bssid))
                 {
-                    if (!_bssidToName.ContainsKey(bssid))
-                    {
-                        _bssidToName[bssid] = bssid; // Default name is the BSSID itself
-                        _bssidToDetails[bssid] = new APDetails(); // Initialize with empty details
-                        SaveSettings();
-                        _loggingService.LogInfo($"Added new AP: {bssid}");
-                    }
+                    _bssidToName[bssid] = bssid; // Default name is the BSSID itself
+                    _bssidToDetails[bssid] = new APDetails(); // Initialize with empty details
+                    SaveSettings();
+                    _loggingService.LogInfo($"Added new AP: {bssid}");
                 }
             }
             catch (Exception ex)
@@ -145,40 +135,37 @@ namespace ping_applet.Utils
 
             try
             {
-                lock (_lockObject)
+                // Ensure the AP exists in our dictionary
+                if (!_bssidToName.ContainsKey(bssid))
                 {
-                    // Ensure the AP exists in our dictionary
-                    if (!_bssidToName.ContainsKey(bssid))
-                    {
-                        AddNewAP(bssid);
-                    }
+                    AddNewAP(bssid);
+                }
 
-                    // Create or update details
-                    if (!_bssidToDetails.TryGetValue(bssid, out var details))
-                    {
-                        details = new APDetails();
-                        _bssidToDetails[bssid] = details;
-                    }
+                // Create or update details
+                if (!_bssidToDetails.TryGetValue(bssid, out var details))
+                {
+                    details = new APDetails();
+                    _bssidToDetails[bssid] = details;
+                }
 
-                    // Only update if we have valid data
-                    bool updated = false;
-                    if (!string.IsNullOrEmpty(band) && details.Band != band)
-                    {
-                        details.Band = band;
-                        updated = true;
-                    }
+                // Only update if we have valid data
+                bool updated = false;
+                if (!string.IsNullOrEmpty(band) && details.Band != band)
+                {
+                    details.Band = band;
+                    updated = true;
+                }
 
-                    if (!string.IsNullOrEmpty(ssid) && details.SSID != ssid)
-                    {
-                        details.SSID = ssid;
-                        updated = true;
-                    }
+                if (!string.IsNullOrEmpty(ssid) && details.SSID != ssid)
+                {
+                    details.SSID = ssid;
+                    updated = true;
+                }
 
-                    if (updated)
-                    {
-                        _loggingService.LogInfo($"Updated details for AP {bssid}: Band={band}, SSID={ssid}");
-                        SaveSettings();
-                    }
+                if (updated)
+                {
+                    _loggingService.LogInfo($"Updated details for AP {bssid}: Band={band}, SSID={ssid}");
+                    SaveSettings();
                 }
             }
             catch (Exception ex)
@@ -201,18 +188,15 @@ namespace ping_applet.Utils
 
             try
             {
-                lock (_lockObject)
+                if (_bssidToName.ContainsKey(bssid))
                 {
-                    if (_bssidToName.ContainsKey(bssid))
-                    {
-                        _bssidToName[bssid] = newName;
-                        SaveSettings();
-                        _loggingService.LogInfo($"Renamed AP {bssid} to: {newName}");
-                    }
-                    else
-                    {
-                        throw new KeyNotFoundException($"BSSID not found: {bssid}");
-                    }
+                    _bssidToName[bssid] = newName;
+                    SaveSettings();
+                    _loggingService.LogInfo($"Renamed AP {bssid} to: {newName}");
+                }
+                else
+                {
+                    throw new KeyNotFoundException($"BSSID not found: {bssid}");
                 }
             }
             catch (Exception ex)
@@ -233,25 +217,22 @@ namespace ping_applet.Utils
 
             try
             {
-                lock (_lockObject)
+                if (!_bssidToName.ContainsKey(bssid))
                 {
-                    if (!_bssidToName.ContainsKey(bssid))
-                    {
-                        throw new KeyNotFoundException($"BSSID not found: {bssid}");
-                    }
-
-                    if (isRoot)
-                    {
-                        _rootBssids.Add(bssid);
-                    }
-                    else
-                    {
-                        _rootBssids.Remove(bssid);
-                    }
-
-                    SaveSettings();
-                    _loggingService.LogInfo($"Set AP {bssid} root status to: {isRoot}");
+                    throw new KeyNotFoundException($"BSSID not found: {bssid}");
                 }
+
+                if (isRoot)
+                {
+                    _rootBssids.Add(bssid);
+                }
+                else
+                {
+                    _rootBssids.Remove(bssid);
+                }
+
+                SaveSettings();
+                _loggingService.LogInfo($"Set AP {bssid} root status to: {isRoot}");
             }
             catch (Exception ex)
             {
@@ -271,14 +252,11 @@ namespace ping_applet.Utils
 
             try
             {
-                lock (_lockObject)
-                {
-                    _bssidToName.Remove(bssid);
-                    _bssidToDetails.Remove(bssid);
-                    _rootBssids.Remove(bssid);
-                    SaveSettings();
-                    _loggingService.LogInfo($"Deleted AP: {bssid}");
-                }
+                _bssidToName.Remove(bssid);
+                _bssidToDetails.Remove(bssid);
+                _rootBssids.Remove(bssid);
+                SaveSettings();
+                _loggingService.LogInfo($"Deleted AP: {bssid}");
             }
             catch (Exception ex)
             {
@@ -293,23 +271,21 @@ namespace ping_applet.Utils
         public string GetDisplayName(string bssid, bool includeDetails = true)
         {
             ThrowIfDisposed();
+
             if (string.IsNullOrEmpty(bssid))
-                return "Not Connected";
+                return _displayFormatter.FormatDisconnectedText();
 
             try
             {
-                lock (_lockObject)
-                {
-                    // Get the base name (custom or BSSID)
-                    string baseName = _bssidToName.TryGetValue(bssid, out string name) ? name : bssid;
+                // Get the base name (custom or BSSID)
+                string baseName = _bssidToName.TryGetValue(bssid, out string name) ? name : bssid;
 
-                    // If we're not including details or no details exist, return just the name
-                    if (!includeDetails || !_bssidToDetails.TryGetValue(bssid, out var details))
-                        return baseName;
+                // If we're not including details or no details exist, return just the name
+                if (!includeDetails || !_bssidToDetails.TryGetValue(bssid, out var details))
+                    return baseName;
 
-                    // Build the formatted name with network details
-                    return FormatDisplayName(baseName, details);
-                }
+                // Use formatter to build the formatted name with network details
+                return _displayFormatter.FormatDisplayName(baseName, details);
             }
             catch (Exception ex)
             {
@@ -319,92 +295,65 @@ namespace ping_applet.Utils
         }
 
         /// <summary>
-        /// Formats the display name with network details
+        /// Loads settings from persistent storage
         /// </summary>
-        private string FormatDisplayName(string baseName, APDetails details)
-        {
-            // If we don't have any details, just return the base name
-            if (string.IsNullOrEmpty(details.Band) && string.IsNullOrEmpty(details.SSID))
-                return baseName;
-
-            // Build details string
-            string detailsStr = "";
-            if (!string.IsNullOrEmpty(details.Band))
-                detailsStr += details.Band;
-
-            if (!string.IsNullOrEmpty(details.SSID))
-            {
-                if (!string.IsNullOrEmpty(detailsStr))
-                    detailsStr += " - ";
-                detailsStr += details.SSID;
-            }
-
-            // Return formatted name
-            return $"{baseName} ({detailsStr})";
-        }
-
         private void LoadSettings()
         {
             try
             {
-                if (File.Exists(_settingsPath))
+                _settings = _settingsStorage.LoadSettings();
+
+                _bssidToName.Clear();
+                foreach (var kvp in _settings.BssidToName)
                 {
-                    var json = File.ReadAllText(_settingsPath);
-                    settings = JsonConvert.DeserializeObject<StoredSettings>(json) ?? new StoredSettings();
+                    _bssidToName[kvp.Key] = kvp.Value;
+                }
 
-                    lock (_lockObject)
-                    {
-                        _bssidToName.Clear();
-                        foreach (var kvp in settings.BssidToName)
-                        {
-                            _bssidToName[kvp.Key] = kvp.Value;
-                        }
+                _bssidToDetails.Clear();
+                foreach (var kvp in _settings.BssidToDetails)
+                {
+                    _bssidToDetails[kvp.Key] = kvp.Value;
+                }
 
-                        _bssidToDetails.Clear();
-                        foreach (var kvp in settings.BssidToDetails ?? new Dictionary<string, APDetails>())
-                        {
-                            _bssidToDetails[kvp.Key] = kvp.Value;
-                        }
-
-                        _rootBssids.Clear();
-                        foreach (var bssid in settings.RootBssids)
-                        {
-                            _rootBssids.Add(bssid);
-                        }
-                    }
-
-                    _loggingService.LogInfo("Settings loaded successfully");
+                _rootBssids.Clear();
+                foreach (var bssid in _settings.RootBssids)
+                {
+                    _rootBssids.Add(bssid);
                 }
             }
             catch (Exception ex)
             {
-                _loggingService.LogError("Failed to load settings", ex);
-                settings = new StoredSettings(); // Use defaults on error
+                _loggingService.LogError("Error loading settings, using defaults", ex);
+                _settings = new APSettings();
             }
         }
 
+        /// <summary>
+        /// Saves settings to persistent storage
+        /// </summary>
         private void SaveSettings()
         {
             try
             {
-                var settingsToSave = new StoredSettings
-                {
-                    BssidToName = new Dictionary<string, string>(_bssidToName),
-                    BssidToDetails = new Dictionary<string, APDetails>(_bssidToDetails),
-                    RootBssids = _rootBssids.ToList(),
-                    NotificationsEnabled = settings.NotificationsEnabled
-                };
+                _settings.BssidToName = new Dictionary<string, string>(_bssidToName);
+                _settings.BssidToDetails = new Dictionary<string, APDetails>(_bssidToDetails);
+                _settings.RootBssids = _rootBssids.ToList();
 
-                var json = JsonConvert.SerializeObject(settingsToSave, Formatting.Indented);
-                File.WriteAllText(_settingsPath, json);
+                if (!_settingsStorage.SaveSettings(_settings))
+                {
+                    _loggingService.LogError("Failed to save settings via storage");
+                }
             }
             catch (Exception ex)
             {
-                _loggingService.LogError("Failed to save settings", ex);
+                _loggingService.LogError("Error saving settings", ex);
                 throw;
             }
         }
 
+        /// <summary>
+        /// Throws an ObjectDisposedException if this object has been disposed
+        /// </summary>
         private void ThrowIfDisposed()
         {
             if (_isDisposed)
@@ -413,6 +362,10 @@ namespace ping_applet.Utils
             }
         }
 
+        /// <summary>
+        /// Disposes resources used by this class
+        /// </summary>
+        /// <param name="disposing">Whether to dispose managed resources</param>
         protected virtual void Dispose(bool disposing)
         {
             if (!_isDisposed && disposing)
@@ -420,6 +373,7 @@ namespace ping_applet.Utils
                 try
                 {
                     SaveSettings();
+                    _settingsStorage.Dispose();
                 }
                 catch (Exception ex)
                 {
@@ -429,27 +383,13 @@ namespace ping_applet.Utils
             }
         }
 
+        /// <summary>
+        /// Disposes resources used by this class
+        /// </summary>
         public void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);
-        }
-
-        /// <summary>
-        /// Class to store additional details about an AP
-        /// </summary>
-        public class APDetails
-        {
-            public string Band { get; set; }
-            public string SSID { get; set; }
-        }
-
-        private class StoredSettings
-        {
-            public Dictionary<string, string> BssidToName { get; set; } = new Dictionary<string, string>();
-            public Dictionary<string, APDetails> BssidToDetails { get; set; } = new Dictionary<string, APDetails>();
-            public List<string> RootBssids { get; set; } = new List<string>();
-            public bool NotificationsEnabled { get; set; } = true;
         }
     }
 }

@@ -344,24 +344,26 @@ namespace ping_applet.UI
                     dialog.Text = "Rename Access Point";
                     dialog.StartPosition = FormStartPosition.CenterScreen;
                     dialog.Width = 300;
-                    dialog.Height = 150;
+                    dialog.Height = 170; // Increased height to accommodate the larger label
                     dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
                     dialog.MaximizeBox = false;
                     dialog.MinimizeBox = false;
 
                     var label = new Label
                     {
-                        Text = "Enter new name:",
+                        Text = $"Enter new name:\n(BSSID: {bssid})",
                         Left = 10,
                         Top = 20,
-                        Width = 270
+                        Width = 270,
+                        Height = 40 // Increased height for two lines
                     };
 
+                    // Get only the base name without details
                     var textBox = new TextBox
                     {
-                        Text = knownAPManager.GetDisplayName(bssid),
+                        Text = knownAPManager.GetDisplayName(bssid, includeDetails: false),
                         Left = 10,
-                        Top = 40,
+                        Top = 65, // Adjusted for the taller label
                         Width = 270
                     };
 
@@ -370,7 +372,7 @@ namespace ping_applet.UI
                         Text = "OK",
                         DialogResult = DialogResult.OK,
                         Left = 105,
-                        Top = 70,
+                        Top = 95, // Adjusted for the taller label
                         Width = 75
                     };
 
@@ -380,7 +382,7 @@ namespace ping_applet.UI
                     if (dialog.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(textBox.Text))
                     {
                         knownAPManager.RenameAP(bssid, textBox.Text);
-                        UpdateCurrentAP(textBox.Text);
+                        UpdateCurrentAP(knownAPManager.GetDisplayName(bssid));
                     }
                 }
             }

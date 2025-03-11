@@ -344,18 +344,39 @@ namespace ping_applet.UI
                     dialog.Text = "Rename Access Point";
                     dialog.StartPosition = FormStartPosition.CenterScreen;
                     dialog.Width = 300;
-                    dialog.Height = 170; // Increased height to accommodate the larger label
+                    dialog.Height = 185; // Increased height to accommodate the additional controls
                     dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
                     dialog.MaximizeBox = false;
                     dialog.MinimizeBox = false;
 
-                    var label = new Label
+                    var nameLabel = new Label
                     {
-                        Text = $"Enter new name:\n(BSSID: {bssid})",
+                        Text = "Enter new name:",
                         Left = 10,
                         Top = 20,
                         Width = 270,
-                        Height = 40 // Increased height for two lines
+                        Height = 20
+                    };
+
+                    var bssidLabel = new Label
+                    {
+                        Text = "BSSID:",
+                        Left = 10,
+                        Top = 45,
+                        Width = 45,
+                        Height = 20
+                    };
+
+                    var bssidTextBox = new TextBox
+                    {
+                        Text = bssid,
+                        Left = 60,
+                        Top = 42,
+                        Width = 220,
+                        ReadOnly = true,
+                        BorderStyle = BorderStyle.None,
+                        BackColor = SystemColors.Control,
+                        Font = new Font(bssidLabel.Font, FontStyle.Regular)
                     };
 
                     // Get only the base name without details
@@ -363,7 +384,7 @@ namespace ping_applet.UI
                     {
                         Text = knownAPManager.GetDisplayName(bssid, includeDetails: false),
                         Left = 10,
-                        Top = 65, // Adjusted for the taller label
+                        Top = 75, // Adjusted for the additional controls
                         Width = 270
                     };
 
@@ -372,11 +393,11 @@ namespace ping_applet.UI
                         Text = "OK",
                         DialogResult = DialogResult.OK,
                         Left = 105,
-                        Top = 95, // Adjusted for the taller label
+                        Top = 105, // Adjusted for the additional controls
                         Width = 75
                     };
 
-                    dialog.Controls.AddRange(new Control[] { label, textBox, button });
+                    dialog.Controls.AddRange(new Control[] { nameLabel, bssidLabel, bssidTextBox, textBox, button });
                     dialog.AcceptButton = button;
 
                     if (dialog.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(textBox.Text))

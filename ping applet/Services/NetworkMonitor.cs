@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Timers; // Added for Timer
 using ping_applet.Core.Interfaces;
 using System.Diagnostics; // Added for Debug
+using System.Net.Sockets; // Added for AddressFamily
 
 namespace ping_applet.Services
 {
@@ -91,7 +92,7 @@ namespace ping_applet.Services
                         currentGateway = newGateway; // Update the stored gateway
                         // Note: Logging would go here if service was injected
                         // _loggingService?.LogInfo($"Gateway updated. New Gateway: {newGateway ?? "None"}. Force update: {forceUpdate}");
-                        Debug.WriteLine($"[NetworkMonitor] Gateway updated. New Gateway: {newGateway ?? "None"}. Force update: {forceUpdate}");
+                        Debug.WriteLine($"[NetworkMonitor] Gateway updated. New Gateway: {newGateway ?? "None"} (IPv4 Preferred). Force update: {forceUpdate}");
                     }
                 }
 
@@ -140,31 +141,47 @@ namespace ping_applet.Services
                 .Where(ni =>
                     ni.OperationalStatus == OperationalStatus.Up &&
                     ni.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
-                    ni.Supports(NetworkInterfaceComponent.IPv4) &&
+                    ni.Supports(NetworkInterfaceComponent.IPv4) && // Ensure IPv4 support on interface
                     ni.GetIPProperties()?.GatewayAddresses?.Count > 0)
                 .OrderByDescending(ni => ni.Speed) // Prefer faster interfaces if multiple are active
                 .ThenBy(ni => ni.Description); // Consistent ordering
 
             foreach (var activeInterface in activeInterfaces)
             {
-                var gateway = activeInterface.GetIPProperties()
-                    .GatewayAddresses
+                var ipProperties = activeInterface.GetIPProperties();
+                if (ipProperties == null) continue;
+
+                // --- MODIFICATION START: Prioritize IPv4 Gateway ---
+                var ipv4Gateway = ipProperties.GatewayAddresses
                     .FirstOrDefault(ga =>
                         ga?.Address != null &&
+                        ga.Address.AddressFamily == AddressFamily.InterNetwork && // Check for IPv4
                         !ga.Address.Equals(System.Net.IPAddress.Parse("0.0.0.0"))) // Exclude 0.0.0.0
                     ?.Address.ToString();
 
-                if (!string.IsNullOrEmpty(gateway))
+                if (!string.IsNullOrEmpty(ipv4Gateway))
                 {
-                    // Log found gateway
-                    // _loggingService?.LogInfo($"Found gateway {gateway} on interface {activeInterface.Description}");
-                    Debug.WriteLine($"[NetworkMonitor] Found gateway {gateway} on interface {activeInterface.Description}");
-                    return gateway;
+                    Debug.WriteLine($"[NetworkMonitor] Found IPv4 gateway {ipv4Gateway} on interface {activeInterface.Description}");
+                    return ipv4Gateway;
+                }
+                // --- MODIFICATION END ---
+
+                // Fallback: If no IPv4 gateway, check for *any* valid gateway (including IPv6)
+                // This maintains connectivity if only IPv6 is configured, although it might be long.
+                // The tooltip truncation will handle length issues later.
+                var anyGateway = ipProperties.GatewayAddresses
+                   .FirstOrDefault(ga =>
+                       ga?.Address != null &&
+                       !ga.Address.Equals(System.Net.IPAddress.Parse("0.0.0.0")))
+                   ?.Address.ToString();
+
+                if (!string.IsNullOrEmpty(anyGateway))
+                {
+                    Debug.WriteLine($"[NetworkMonitor] Found non-IPv4 gateway {anyGateway} on interface {activeInterface.Description} (using as fallback)");
+                    return anyGateway; // Return the first valid one found if no IPv4
                 }
             }
 
-            // Log if no gateway found
-            // _loggingService?.LogInfo("No active default gateway found.");
             Debug.WriteLine("[NetworkMonitor] No active default gateway found.");
             return null;
         }
@@ -184,15 +201,11 @@ namespace ping_applet.Services
             {
                 if (!isMonitoring)
                 {
-                    // Log start
-                    // _loggingService?.LogInfo("Starting network monitoring...");
                     Debug.WriteLine("[NetworkMonitor] Starting network monitoring...");
-                    NetworkChange.NetworkAddressChanged += NetworkAddressChangedHandler; // Re-evaluate if needed, but keep for now
+                    NetworkChange.NetworkAddressChanged += NetworkAddressChangedHandler;
                     NetworkChange.NetworkAvailabilityChanged += NetworkAvailabilityChangedHandler;
                     gatewayPollingTimer.Start(); // Start the periodic polling timer
                     isMonitoring = true;
-                    // Log started
-                    // _loggingService?.LogInfo("Network monitoring started.");
                     Debug.WriteLine("[NetworkMonitor] Network monitoring started.");
                 }
             }
@@ -205,15 +218,11 @@ namespace ping_applet.Services
             {
                 if (isMonitoring)
                 {
-                    // Log stop
-                    // _loggingService?.LogInfo("Stopping network monitoring...");
                     Debug.WriteLine("[NetworkMonitor] Stopping network monitoring...");
                     NetworkChange.NetworkAddressChanged -= NetworkAddressChangedHandler;
                     NetworkChange.NetworkAvailabilityChanged -= NetworkAvailabilityChangedHandler;
                     gatewayPollingTimer.Stop(); // Stop the periodic polling timer
                     isMonitoring = false;
-                    // Log stopped
-                    // _loggingService?.LogInfo("Network monitoring stopped.");
                     Debug.WriteLine("[NetworkMonitor] Network monitoring stopped.");
                 }
             }
@@ -232,56 +241,40 @@ namespace ping_applet.Services
             catch (Exception ex)
             {
                 // Should not happen if UpdateGateway handles its exceptions, but as a safeguard
-                // _loggingService?.LogError("Unhandled exception in GatewayPollingTimer_Elapsed", ex);
                 Debug.WriteLine($"[NetworkMonitor] ERROR in GatewayPollingTimer_Elapsed: {ex.Message}");
             }
         }
 
         private void NetworkAddressChangedHandler(object sender, EventArgs e)
         {
-            // This event can be noisy, especially during Wi-Fi transitions.
-            // Currently, the periodic polling timer is the main mechanism for detecting
-            // static IP changes. We could add debouncing here if needed later,
-            // but for now, rely on the timer.
-            // _loggingService?.LogInfo("NetworkAddressChanged event received.");
+            // This event can be noisy. Relying on periodic polling and availability changes.
             Debug.WriteLine("[NetworkMonitor] NetworkAddressChanged event received.");
             // Consider adding a debounced call to UpdateGateway(false) here if polling proves too slow.
         }
 
         private async void NetworkAvailabilityChangedHandler(object sender, NetworkAvailabilityEventArgs e)
         {
-            // Use a temporary variable to hold disposal status to avoid race condition after await
             bool disposedBeforeCheck = isDisposed;
             if (disposedBeforeCheck) return;
 
-            // Log availability change
-            // _loggingService?.LogInfo($"Network availability changed. IsAvailable: {e.IsAvailable}");
             Debug.WriteLine($"[NetworkMonitor] Network availability changed. IsAvailable: {e.IsAvailable}");
 
-            // Safely invoke the event handler
             NetworkAvailabilityChanged?.Invoke(this, e.IsAvailable);
 
-            // If network becomes available, update the gateway after a short delay
-            // to allow the network stack to stabilize. Force the update to ensure
-            // the state is refreshed immediately upon reconnection.
             if (e.IsAvailable)
             {
                 try
                 {
                     await Task.Delay(NETWORK_STABILIZATION_DELAY_MS);
-                    // Re-check disposal status after delay
                     if (isDisposed) return;
-                    await UpdateGateway(forceUpdate: true);
+                    await UpdateGateway(forceUpdate: true); // Force update on reconnect
                 }
                 catch (ObjectDisposedException)
                 {
                     Debug.WriteLine("[NetworkMonitor] NetworkMonitor disposed during stabilization delay.");
-                    // Ignore if disposed during the delay
                 }
                 catch (Exception ex)
                 {
-                    // Log error during update after network available
-                    // _loggingService?.LogError("Error updating gateway after network became available", ex);
                     Debug.WriteLine($"[NetworkMonitor] ERROR updating gateway after network became available: {ex.Message}");
                 }
             }
@@ -289,20 +282,15 @@ namespace ping_applet.Services
             {
                 try
                 {
-                    // Immediately update gateway state to null if network is lost
-                    // Re-check disposal status before update
                     if (isDisposed) return;
-                    await UpdateGateway(forceUpdate: true); // Force update to ensure state becomes null
+                    await UpdateGateway(forceUpdate: true); // Force update to null gateway state
                 }
                 catch (ObjectDisposedException)
                 {
                     Debug.WriteLine("[NetworkMonitor] NetworkMonitor disposed during unavailable update.");
-                    // Ignore if disposed during update call
                 }
                 catch (Exception ex)
                 {
-                    // Log error during update after network unavailable
-                    // _loggingService?.LogError("Error updating gateway after network became unavailable", ex);
                     Debug.WriteLine($"[NetworkMonitor] ERROR updating gateway after network became unavailable: {ex.Message}");
                 }
             }
@@ -316,22 +304,15 @@ namespace ping_applet.Services
             {
                 if (disposing)
                 {
-                    // Stop monitoring first
                     StopMonitoring();
-
-                    // Dispose managed resources
                     if (gatewayPollingTimer != null)
                     {
-                        gatewayPollingTimer.Elapsed -= GatewayPollingTimer_Elapsed; // Unsubscribe
+                        gatewayPollingTimer.Elapsed -= GatewayPollingTimer_Elapsed;
                         gatewayPollingTimer.Dispose();
                         gatewayPollingTimer = null;
                     }
-                    // Log disposal
-                    // _loggingService?.LogInfo("NetworkMonitor disposed.");
                     Debug.WriteLine("[NetworkMonitor] NetworkMonitor disposed.");
                 }
-                // No unmanaged resources to free directly
-
                 isDisposed = true;
             }
         }
@@ -339,10 +320,9 @@ namespace ping_applet.Services
         public void Dispose()
         {
             Dispose(true);
-            GC.SuppressFinalize(this); // Suppress finalization as we've handled disposal
+            GC.SuppressFinalize(this);
         }
 
-        // Helper to check disposal status
         private void ThrowIfDisposed()
         {
             if (isDisposed)
@@ -350,11 +330,5 @@ namespace ping_applet.Services
                 throw new ObjectDisposedException(nameof(NetworkMonitor));
             }
         }
-
-        // Destructor (Finalizer) - only if needed for unmanaged resources
-        // ~NetworkMonitor()
-        // {
-        //     Dispose(false);
-        // }
     }
 }

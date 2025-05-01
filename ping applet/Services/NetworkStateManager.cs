@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Net.NetworkInformation; // Added
+using System.Linq; // Added
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Timers;
@@ -12,27 +14,27 @@ namespace ping_applet.Services
         private readonly ILoggingService _loggingService;
         private Timer _monitorTimer;
         private string _currentBssid;
-        private string _previousBssid;  // Added to track previous BSSID
+        private string _previousBssid;
         private int _currentSignalStrength;
         private int _currentChannel;
         private string _currentBand;
-        private string _currentSsid; // Added to track SSID name
+        private string _currentSsid;
         private bool _isDisposed;
-        private bool _isInitialCheck = true;
+        // Removed _isInitialCheck as its logic was moved/simplified
         private bool _isLocationServicesEnabled = true;
+        private bool _hasWifiInterface = true; // Assume yes initially, check at startup
         private const int CHECK_INTERVAL = 1000; // 1 second
 
-        // Updated event to include both old and new BSSIDs
         public event EventHandler<BssidChangeEventArgs> BssidChanged;
         public event EventHandler<int> SignalStrengthChanged;
         public event EventHandler<bool> LocationServicesStateChanged;
 
         public string CurrentBssid => _currentBssid;
-        public string PreviousBssid => _previousBssid;  // Added property for previous BSSID
+        public string PreviousBssid => _previousBssid;
         public int CurrentSignalStrength => _currentSignalStrength;
         public int CurrentChannel => _currentChannel;
         public string CurrentBand => _currentBand;
-        public string CurrentSsid => _currentSsid; // Added property for SSID
+        public string CurrentSsid => _currentSsid;
 
         public NetworkStateManager(ILoggingService loggingService)
         {
@@ -46,53 +48,72 @@ namespace ping_applet.Services
 
             try
             {
-                _loggingService.LogInfo("Starting network state monitoring");
+                _hasWifiInterface = NetworkInterface.GetAllNetworkInterfaces()
+                                      .Any(ni => ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211);
 
-                // Perform initial state check immediately
-                await CheckNetworkState();
+                if (!_hasWifiInterface)
+                {
+                    _loggingService.LogInfo("No WiFi interface detected. AP tracking will be disabled.");
+                    _currentBssid = null;
+                    _currentChannel = 0;
+                    _currentBand = null;
+                    _currentSsid = null;
+                }
+                else
+                {
+                    _loggingService.LogInfo("WiFi interface detected. Starting initial network state check.");
+                    // Perform initial state check immediately only if WiFi exists
+                    await CheckNetworkState();
+                    // Initial state logged within CheckNetworkState/GetWifiInfo if connection found
+                }
 
-                // Start periodic monitoring
                 _monitorTimer = new Timer(CHECK_INTERVAL);
                 _monitorTimer.Elapsed += async (s, e) => await CheckNetworkState();
+                _monitorTimer.AutoReset = true;
                 _monitorTimer.Start();
 
-                _loggingService.LogInfo("Network state monitoring started successfully");
+                _loggingService.LogInfo("Network state monitoring timer started");
             }
             catch (Exception ex)
             {
-                _loggingService.LogError("Failed to start network monitoring", ex);
-                throw;
+                _loggingService.LogError("Failed to start network state monitoring", ex);
+                throw; // Re-throw critical startup errors
             }
         }
 
         private async Task CheckNetworkState()
         {
-            if (_isDisposed) return;
+            if (_isDisposed || !_hasWifiInterface)
+            {
+                return;
+            }
 
             try
             {
                 var (bssid, signalStrength, channel, band, ssid) = await GetWifiInfo();
 
+                // Handle case where WiFi exists but is not connected or info couldn't be retrieved
                 if (string.IsNullOrEmpty(bssid))
                 {
-                    if (_currentBssid != null)
+                    if (_currentBssid != null) // If we were previously connected
                     {
-                        _loggingService.LogInfo("WiFi connection lost");
-                        _previousBssid = _currentBssid;  // Store the last known BSSID
+                        _loggingService.LogInfo($"WiFi disconnected from BSSID: {_currentBssid}");
+                        _previousBssid = _currentBssid;
                         _currentBssid = null;
                         _currentChannel = 0;
                         _currentBand = null;
-                        _currentSsid = null; // Clear SSID
+                        _currentSsid = null;
                         BssidChanged?.Invoke(this, new BssidChangeEventArgs(_previousBssid, null));
                     }
+                    // If _currentBssid was already null, do nothing (still disconnected)
                     return;
                 }
 
-                // Handle BSSID changes
+                // --- BSSID Change Handling ---
                 if (bssid != _currentBssid)
                 {
-                    _previousBssid = _currentBssid;  // Store the old BSSID before updating
-                    var oldBssid = _currentBssid ?? "none";
+                    _previousBssid = _currentBssid; // Store the old BSSID before updating
+                    var oldBssidForLog = _currentBssid ?? "none";
                     var oldChannel = _currentChannel;
                     var oldBand = _currentBand ?? "unknown";
                     var oldSsid = _currentSsid ?? "unknown";
@@ -102,56 +123,50 @@ namespace ping_applet.Services
                     _currentBand = band;
                     _currentSsid = ssid;
 
-                    if (_isInitialCheck)
+                    _loggingService.LogInfo(
+                        $"WiFi connected/changed:\n" +
+                        $"  From: BSSID={oldBssidForLog}, Channel={oldChannel}, Band={oldBand}, SSID={oldSsid}\n" +
+                        $"  To:   BSSID={bssid}, Channel={channel}, Band={band}, SSID={ssid}"
+                    );
+
+                    BssidChanged?.Invoke(this, new BssidChangeEventArgs(_previousBssid, bssid)); // Pass actual previous BSSID
+                }
+                // --- Signal Strength / Details Change Handling (only if BSSID is the same) ---
+                else
+                {
+                    if (Math.Abs(signalStrength - _currentSignalStrength) > 5)
                     {
-                        _loggingService.LogInfo($"Initial connection - BSSID: {bssid}, Channel: {channel}, Band: {band}, SSID: {ssid}");
-                        _isInitialCheck = false;
+                        var oldStrength = _currentSignalStrength;
+                        _currentSignalStrength = signalStrength;
+                        _loggingService.LogInfo(
+                            $"Signal strength changed from {oldStrength}% to {signalStrength}% " +
+                            $"(BSSID: {bssid}, Channel: {channel}, Band: {band}, SSID: {ssid})"
+                        );
+                        SignalStrengthChanged?.Invoke(this, signalStrength);
                     }
-                    else
+
+                    // Check if other details changed while connected to the same BSSID
+                    if (channel != _currentChannel || band != _currentBand || ssid != _currentSsid)
                     {
                         _loggingService.LogInfo(
-                            $"Network transition detected:\n" +
-                            $"  From: BSSID={oldBssid}, Channel={oldChannel}, Band={oldBand}, SSID={oldSsid}\n" +
-                            $"  To: BSSID={bssid}, Channel={channel}, Band={band}, SSID={ssid}"
+                            $"Network details changed for BSSID {bssid}:\n" +
+                            $"  From: Channel={_currentChannel}, Band={_currentBand}, SSID={_currentSsid}\n" +
+                            $"  To:   Channel={channel}, Band={band}, SSID={ssid}"
                         );
+                        _currentChannel = channel;
+                        _currentBand = band;
+                        _currentSsid = ssid;
+                        // Removed unused 'detailsChanged' variable assignment
                     }
-                    BssidChanged?.Invoke(this, new BssidChangeEventArgs(_previousBssid, bssid));
-                }
-                // Rest of the method remains unchanged
-                else if (Math.Abs(signalStrength - _currentSignalStrength) > 5)
-                {
-                    var oldStrength = _currentSignalStrength;
-                    _currentSignalStrength = signalStrength;
-                    _loggingService.LogInfo(
-                        $"Signal strength changed from {oldStrength}% to {signalStrength}% " +
-                        $"(Channel: {channel}, Band: {band}, SSID: {ssid})"
-                    );
-                    SignalStrengthChanged?.Invoke(this, signalStrength);
-                }
-                else if (channel != _currentChannel || band != _currentBand || ssid != _currentSsid)
-                {
-                    // Also track SSID changes
-                    _loggingService.LogInfo(
-                        $"Network details changed for BSSID {bssid}:\n" +
-                        $"  From: Channel={_currentChannel}, Band={_currentBand}, SSID={_currentSsid}\n" +
-                        $"  To: Channel={channel}, Band={band}, SSID={ssid}"
-                    );
-                    _currentChannel = channel;
-                    _currentBand = band;
-                    _currentSsid = ssid;
-                }
-
-                // Always invoke BssidChanged on the initial check to update UI
-                if (_isInitialCheck)
-                {
-                    BssidChanged?.Invoke(this, new BssidChangeEventArgs(null, bssid));
                 }
             }
             catch (Exception ex)
             {
+                // Log errors during the check but allow the timer to continue
                 _loggingService.LogError("Error checking network state", ex);
             }
         }
+
 
         private async Task<(string bssid, int signalStrength, int channel, string band, string ssid)> GetWifiInfo()
         {
@@ -172,13 +187,14 @@ namespace ping_applet.Services
                 {
                     process.Start();
                     string output = await process.StandardOutput.ReadToEndAsync();
-                    process.WaitForExit();
+                    await Task.Run(() => process.WaitForExit());
+
 
                     if (process.ExitCode != 0)
                     {
-                        // Check if output contains location services error or elevation error
                         bool isLocationServicesError = output.Contains("Network shell commands need location permission");
                         bool isElevationError = output.Contains("error 5") && output.Contains("requires elevation");
+                        bool isNoInterfaceError = output.Contains("There is no wireless interface on the system");
 
                         if (isLocationServicesError || isElevationError)
                         {
@@ -186,37 +202,44 @@ namespace ping_applet.Services
                             {
                                 _isLocationServicesEnabled = false;
                                 LocationServicesStateChanged?.Invoke(this, false);
-                                _loggingService.LogError("Location services are disabled or netsh requires elevation");
+                                // Use LogInfo for operational state change, not warning/error
+                                _loggingService.LogInfo("Location services are disabled or netsh requires elevation. AP tracking requires these.");
                             }
+                            return (null, 0, 0, null, null);
                         }
-                        else
+                        else if (isNoInterfaceError)
                         {
-                            _loggingService.LogError($"netsh command failed with exit code: {process.ExitCode}");
+                            _loggingService.LogInfo("netsh reported no wireless interface.");
+                            _hasWifiInterface = false; // Update state
+                            return (null, 0, 0, null, null);
                         }
-                        return (null, 0, 0, null, null);
+                        else // Log other unexpected errors
+                        {
+                            // Log as Error because the command failed unexpectedly
+                            _loggingService.LogError($"netsh command failed. Exit Code: {process.ExitCode}. Output: {output.Trim()}");
+                            return (null, 0, 0, null, null);
+                        }
                     }
 
-                    // If we got here successfully and location services were previously disabled,
-                    // notify that they're now enabled
                     if (!_isLocationServicesEnabled)
                     {
                         _isLocationServicesEnabled = true;
                         LocationServicesStateChanged?.Invoke(this, true);
-                        _loggingService.LogInfo("Location services are now enabled");
+                        _loggingService.LogInfo("Location services are now enabled/available.");
                     }
 
-                    // Parse BSSID (XX:XX:XX:XX:XX:XX format)
-                    var bssidMatch = Regex.Match(output, @"BSSID\s+:\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})",
-                        RegexOptions.IgnoreCase);
+                    // Check for disconnected state *after* successful exit code
+                    if (output.Contains("State              : disconnected"))
+                    {
+                        _loggingService.LogInfo("netsh reports WiFi interface is disconnected.");
+                        return (null, 0, 0, null, null);
+                    }
 
-                    // Parse Signal Strength (xx% format)
+                    // --- Parsing Logic ---
+                    var bssidMatch = Regex.Match(output, @"BSSID\s+:\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})", RegexOptions.IgnoreCase);
                     var signalMatch = Regex.Match(output, @"Signal\s+:\s+(\d+)%");
-
-                    // Parse Channel and Band
                     var channelMatch = Regex.Match(output, @"Channel\s+:\s+(\d+)");
-                    var bandMatch = Regex.Match(output, @"Band\s+:\s+(.+?)\r?\n");
-
-                    // Parse SSID
+                    var bandMatch = Regex.Match(output, @"Radio type\s+:\s+(.+?)\r?\n"); // Changed to Radio type for band info (like 802.11ax)
                     var ssidMatch = Regex.Match(output, @"SSID\s+:\s+(.+?)\r?\n");
 
                     string bssid = bssidMatch.Success ? bssidMatch.Groups[1].Value : null;
@@ -227,7 +250,8 @@ namespace ping_applet.Services
 
                     if (!bssidMatch.Success)
                     {
-                        _loggingService.LogInfo("No BSSID found in netsh output");
+                        // Log as Info, as this usually means connected but BSSID not available (e.g., connecting state)
+                        _loggingService.LogInfo($"Could not parse BSSID from netsh output (State may be connecting/authenticating). Output: {output.Trim()}");
                     }
 
                     return (bssid, signalStrength, channel, band, ssid);
@@ -235,8 +259,8 @@ namespace ping_applet.Services
             }
             catch (Exception ex)
             {
-                _loggingService.LogError("Error getting WiFi info", ex);
-                return (null, 0, 0, null, null);
+                _loggingService.LogError("Error executing or parsing netsh command", ex);
+                return (null, 0, 0, null, null); // Return nulls on exception
             }
         }
 
@@ -244,6 +268,7 @@ namespace ping_applet.Services
         {
             try
             {
+                // Safely stop and dispose the timer
                 _monitorTimer?.Stop();
                 _monitorTimer?.Dispose();
                 _monitorTimer = null;
@@ -251,24 +276,29 @@ namespace ping_applet.Services
             }
             catch (Exception ex)
             {
+                // Log potential errors during stop, but don't crash
                 _loggingService.LogError("Error stopping network monitoring", ex);
             }
         }
 
         protected virtual void Dispose(bool disposing)
         {
-            if (!_isDisposed && disposing)
+            if (!_isDisposed)
             {
-                try
+                if (disposing)
                 {
-                    StopMonitoring();
+                    try
+                    {
+                        StopMonitoring(); // Ensure timer is stopped and disposed
+                    }
+                    catch (Exception ex)
+                    {
+                        _loggingService?.LogError("Error stopping monitor during NetworkStateManager disposal", ex);
+                    }
                     _isDisposed = true;
-                    _loggingService.LogInfo("NetworkStateManager disposed");
+                    _loggingService?.LogInfo("NetworkStateManager disposed");
                 }
-                catch (Exception ex)
-                {
-                    _loggingService.LogError("Error during NetworkStateManager disposal", ex);
-                }
+                _isDisposed = true;
             }
         }
 

@@ -13,7 +13,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCopyright("Copyright © Royal College of Physicians 2025")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
-[assembly: AssemblyMetadata("BuildTimestamp", "10/04/25 14:12")]  // Will be updated by build script
+[assembly: AssemblyMetadata("BuildTimestamp", "01/05/25 13:09")]  // Will be updated by build script
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from

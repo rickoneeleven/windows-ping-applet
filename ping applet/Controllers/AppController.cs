@@ -1,56 +1,65 @@
 ﻿using System;
+using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Threading.Tasks;
-using System.Timers;
+// using System.Timers; // No longer needed as we will fully qualify
 using ping_applet.Core.Interfaces;
 using ping_applet.Services;
 using ping_applet.UI;
-using static ping_applet.Services.NetworkStateManager; // Assuming BssidChangeEventArgs is here
-using System.Diagnostics; // For Debug.WriteLine
+using ping_applet.Utils;
+using static ping_applet.Services.NetworkStateManager;
+using System.Diagnostics;
+using System.Linq;
+using ping_applet.Forms;
+using System.Windows.Forms; // For DialogResult and MessageBox
 
 namespace ping_applet.Controllers
 {
     public class AppController : IDisposable
     {
+        private enum PingTargetType { DefaultGateway, CustomHost }
+
         private readonly INetworkMonitor networkMonitor;
         private readonly IPingService pingService;
         private readonly ILoggingService loggingService;
         private readonly TrayIconManager trayIconManager;
         private readonly NetworkStateManager networkStateManager;
-        private readonly Timer bssidResetTimer;
+        private readonly KnownAPManager knownAPManager;
+        // Fully qualify Timer to System.Timers.Timer
+        private readonly System.Timers.Timer bssidResetTimer;
+        private readonly System.Timers.Timer periodicPingTimer;
 
         private bool isDisposed;
         private bool isInBssidTransition;
-        private string currentDisplayText;
+        private string currentIconDisplayText = "--";
 
-        private const int PING_INTERVAL = 1000; // 1 second
-        private const int PING_TIMEOUT = 1000;  // 1 second timeout
-        private const int BSSID_TRANSITION_WINDOW = 10000; // 10 seconds
+        private PingTargetType activePingTargetType = PingTargetType.DefaultGateway;
+        private string customPingTargetUserInput;
+        private string currentResolvedPingAddress;
+        private bool isCustomHostResolutionError;
+
+        private const int PING_INTERVAL_MS = 1000;
+        private const int PING_TIMEOUT_MS = 1000;
+        private const int BSSID_TRANSITION_WINDOW_MS = 10000;
 
         public event EventHandler ApplicationExit;
 
         public AppController(
             INetworkMonitor networkMonitor,
             ILoggingService loggingService,
-            TrayIconManager trayIconManager)
+            TrayIconManager trayIconManager,
+            KnownAPManager knownAPManager)
         {
-            // Services injected via constructor (good)
             this.networkMonitor = networkMonitor ?? throw new ArgumentNullException(nameof(networkMonitor));
             this.loggingService = loggingService ?? throw new ArgumentNullException(nameof(loggingService));
             this.trayIconManager = trayIconManager ?? throw new ArgumentNullException(nameof(trayIconManager));
-
-            // Direct instantiation of dependencies - this violates Principle #7
-            // To be addressed if this class is refactored for dependency injection later.
-            // For now, we focus on the disposal order as per PRD.
-            this.pingService = new PingService(this.networkMonitor); // PingService depends on INetworkMonitor
-            this.networkStateManager = new NetworkStateManager(this.loggingService); // NetworkStateManager depends on ILoggingService
-
-            this.bssidResetTimer = new Timer(BSSID_TRANSITION_WINDOW)
-            {
-                AutoReset = false
-            };
-
-            // Subscribe to events
+            this.knownAPManager = knownAPManager ?? throw new ArgumentNullException(nameof(knownAPManager));
+            this.pingService = new PingService(this.networkMonitor);
+            this.networkStateManager = new NetworkStateManager(this.loggingService);
+            // Fully qualify Timer instantiation
+            this.bssidResetTimer = new System.Timers.Timer(BSSID_TRANSITION_WINDOW_MS) { AutoReset = false };
+            this.periodicPingTimer = new System.Timers.Timer(PING_INTERVAL_MS) { AutoReset = true };
             SubscribeToEvents();
             Debug.WriteLine("[AppController] AppController instantiated and events subscribed.");
         }
@@ -58,11 +67,15 @@ namespace ping_applet.Controllers
         private void SubscribeToEvents()
         {
             this.bssidResetTimer.Elapsed += BssidResetTimer_Elapsed;
+            this.periodicPingTimer.Elapsed += PeriodicPingTimer_Elapsed;
             this.networkMonitor.GatewayChanged += NetworkMonitor_GatewayChanged;
             this.networkMonitor.NetworkAvailabilityChanged += NetworkMonitor_NetworkAvailabilityChanged;
             this.pingService.PingCompleted += PingService_PingCompleted;
             this.pingService.PingError += PingService_PingError;
-            this.trayIconManager.QuitRequested += OnQuitRequested; // Renamed for clarity
+            this.trayIconManager.QuitRequested += OnQuitRequested;
+            this.trayIconManager.SetDefaultGatewayTargetRequested += TrayIconManager_SetDefaultGatewayTargetRequested;
+            this.trayIconManager.ActivateExistingCustomTargetRequested += TrayIconManager_ActivateExistingCustomTargetRequested;
+            this.trayIconManager.ShowSetCustomTargetDialogRequested += TrayIconManager_ShowSetCustomTargetDialogRequested;
             this.networkStateManager.BssidChanged += NetworkStateManager_BssidChanged;
             this.networkStateManager.LocationServicesStateChanged += NetworkStateManager_LocationServicesStateChanged;
         }
@@ -70,42 +83,57 @@ namespace ping_applet.Controllers
         private void UnsubscribeFromEvents()
         {
             Debug.WriteLine("[AppController] Unsubscribing from events.");
-            this.bssidResetTimer.Elapsed -= BssidResetTimer_Elapsed;
-            this.networkMonitor.GatewayChanged -= NetworkMonitor_GatewayChanged;
-            this.networkMonitor.NetworkAvailabilityChanged -= NetworkMonitor_NetworkAvailabilityChanged;
-            this.pingService.PingCompleted -= PingService_PingCompleted;
-            this.pingService.PingError -= PingService_PingError;
-            this.trayIconManager.QuitRequested -= OnQuitRequested;
-            this.networkStateManager.BssidChanged -= NetworkStateManager_BssidChanged;
-            this.networkStateManager.LocationServicesStateChanged -= NetworkStateManager_LocationServicesStateChanged;
+            if (bssidResetTimer != null) bssidResetTimer.Elapsed -= BssidResetTimer_Elapsed;
+            if (periodicPingTimer != null) periodicPingTimer.Elapsed -= PeriodicPingTimer_Elapsed;
+            if (networkMonitor != null) { networkMonitor.GatewayChanged -= NetworkMonitor_GatewayChanged; networkMonitor.NetworkAvailabilityChanged -= NetworkMonitor_NetworkAvailabilityChanged; }
+            if (pingService != null) { pingService.PingCompleted -= PingService_PingCompleted; pingService.PingError -= PingService_PingError; }
+            if (trayIconManager != null) { trayIconManager.QuitRequested -= OnQuitRequested; trayIconManager.SetDefaultGatewayTargetRequested -= TrayIconManager_SetDefaultGatewayTargetRequested; trayIconManager.ActivateExistingCustomTargetRequested -= TrayIconManager_ActivateExistingCustomTargetRequested; trayIconManager.ShowSetCustomTargetDialogRequested -= TrayIconManager_ShowSetCustomTargetDialogRequested; }
+            if (networkStateManager != null) { networkStateManager.BssidChanged -= NetworkStateManager_BssidChanged; networkStateManager.LocationServicesStateChanged -= NetworkStateManager_LocationServicesStateChanged; }
         }
 
-        private void OnQuitRequested(object sender, EventArgs e)
-        {
-            if (isDisposed) return;
-            Debug.WriteLine("[AppController] QuitRequested event received from TrayIconManager.");
-            ApplicationExit?.Invoke(this, EventArgs.Empty);
-        }
+        private async void TrayIconManager_SetDefaultGatewayTargetRequested(object sender, EventArgs e) { if (isDisposed) return; loggingService.LogInfo("[AppController] Request to set ping target to Default Gateway."); await SetPingTargetToDefaultGatewayAsync(); }
+        private async void TrayIconManager_ActivateExistingCustomTargetRequested(object sender, string host) { if (isDisposed) return; loggingService.LogInfo($"[AppController] Request to activate existing custom ping target: {host}."); await SetPingTargetToCustomHostAsync(host); }
 
-        private void NetworkStateManager_LocationServicesStateChanged(object sender, bool isEnabled)
+        private async void TrayIconManager_ShowSetCustomTargetDialogRequested(object sender, EventArgs e)
         {
             if (isDisposed) return;
+            loggingService.LogInfo("[AppController] Received request to show 'Set Custom Ping Target' dialog.");
             try
             {
-                trayIconManager.UpdateLocationServicesState(!isEnabled);
-                if (!isEnabled)
+                using (var dialog = new SetCustomTargetForm(this.customPingTargetUserInput))
                 {
-                    loggingService.LogInfo("Location services are disabled - AP tracking will not work");
-                }
-                else
-                {
-                    loggingService.LogInfo("Location services are now enabled - AP tracking resumed");
+                    DialogResult result = dialog.ShowDialog();
+                    if (result == DialogResult.OK)
+                    {
+                        string newTarget = dialog.TargetHost;
+                        loggingService.LogInfo($"[AppController] 'Set Custom Ping Target' dialog OK. New target: {newTarget}");
+                        if (!string.IsNullOrWhiteSpace(newTarget)) { await SetPingTargetToCustomHostAsync(newTarget); }
+                        else { loggingService.LogInfo("[AppController] 'Set Custom Ping Target' dialog returned OK but with an empty target. No change made."); }
+                    }
+                    else { loggingService.LogInfo($"[AppController] 'Set Custom Ping Target' dialog Cancelled or closed. Result: {result}"); }
                 }
             }
             catch (Exception ex)
             {
-                loggingService.LogError("Error handling location services state change", ex);
+                loggingService.LogError("[AppController] Error showing or processing 'Set Custom Ping Target' dialog.", ex);
+                MessageBox.Show("Error opening the custom target dialog. Check logs for details.", "Dialog Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void UpdateMenuPingTargetDisplay()
+        {
+            if (isDisposed || trayIconManager == null || trayIconManager.IsDisposed) return;
+            string gwDisplay = networkMonitor.CurrentGateway;
+            string customDisplay = customPingTargetUserInput;
+            trayIconManager.UpdatePingTargetDisplayInMenu(activePingTargetType == PingTargetType.CustomHost, gwDisplay, customDisplay);
+        }
+
+        // Event handler for System.Timers.Timer.Elapsed
+        private async void PeriodicPingTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
+        {
+            if (isDisposed || string.IsNullOrEmpty(currentResolvedPingAddress)) return;
+            try { await pingService.SendPingAsync(currentResolvedPingAddress, PING_TIMEOUT_MS); }
+            catch (Exception ex) { loggingService.LogError($"Error in periodic ping to {currentResolvedPingAddress}", ex); }
         }
 
         public async Task InitializeAsync()
@@ -113,167 +141,116 @@ namespace ping_applet.Controllers
             if (isDisposed) throw new ObjectDisposedException(nameof(AppController));
             try
             {
-                loggingService.LogInfo("Application starting up. AppController initializing.");
+                loggingService.LogInfo("AppController initializing.");
                 await networkMonitor.InitializeAsync();
                 await networkStateManager.StartMonitoring();
-                pingService.StartPingTimer(PING_INTERVAL);
-
-                if (!string.IsNullOrEmpty(networkMonitor.CurrentGateway))
+                customPingTargetUserInput = knownAPManager.GetLastCustomPingTarget();
+                if (!string.IsNullOrEmpty(customPingTargetUserInput))
                 {
-                    await pingService.SendPingAsync(networkMonitor.CurrentGateway, PING_TIMEOUT);
+                    loggingService.LogInfo($"Found last custom ping target input: {customPingTargetUserInput}. Attempting to set.");
+                    await SetPingTargetToCustomHostAsync(customPingTargetUserInput, isInitialLoad: true);
                 }
-                loggingService.LogInfo("AppController initialization complete.");
+                else
+                {
+                    loggingService.LogInfo("No last custom ping target. Defaulting to gateway.");
+                    currentResolvedPingAddress = networkMonitor.CurrentGateway;
+                    activePingTargetType = PingTargetType.DefaultGateway;
+                    if (string.IsNullOrEmpty(currentResolvedPingAddress)) ShowErrorState("GW?");
+                }
+                LogActivePingTarget();
+                UpdateMenuPingTargetDisplay();
+                periodicPingTimer.Start();
+                loggingService.LogInfo($"AppController init complete. Pings started for: {currentResolvedPingAddress ?? "None"}.");
+                if (!string.IsNullOrEmpty(currentResolvedPingAddress)) { await pingService.SendPingAsync(currentResolvedPingAddress, PING_TIMEOUT_MS); }
             }
-            catch (Exception ex)
-            {
-                loggingService.LogError("AppController initialization error", ex);
-                ShowErrorState("INIT!");
-                throw; // Re-throw to allow MainForm to catch and handle.
-            }
+            catch (Exception ex) { loggingService.LogError("AppController init error", ex); ShowErrorState("INIT!"); throw; }
         }
 
-        private void NetworkStateManager_BssidChanged(object sender, BssidChangeEventArgs e)
+        public async Task SetPingTargetToDefaultGatewayAsync()
         {
             if (isDisposed) return;
-            try
-            {
-                isInBssidTransition = true;
-                bssidResetTimer.Stop();
-                bssidResetTimer.Start();
-
-                trayIconManager.UpdateCurrentAP(
-                    e.NewBssid,
-                    networkStateManager.CurrentBand,
-                    networkStateManager.CurrentSsid
-                );
-
-                trayIconManager.ShowTransitionBalloon(e.OldBssid, e.NewBssid);
-
-                if (!string.IsNullOrEmpty(currentDisplayText))
-                {
-                    string tooltipText = FormatTooltip(networkMonitor.CurrentGateway, e.NewBssid);
-                    trayIconManager.UpdateIcon(
-                        currentDisplayText,
-                        tooltipText,
-                        false,
-                        true, // isTransition
-                        true  // useBlackText for transition
-                    );
-                }
-                loggingService.LogInfo($"BSSID changed from {e.OldBssid ?? "None"} to {e.NewBssid ?? "None"}. Transition state active.");
-            }
-            catch (Exception ex)
-            {
-                loggingService.LogError("Error handling BSSID change", ex);
-            }
+            loggingService.LogInfo("Setting ping target to Default Gateway.");
+            activePingTargetType = PingTargetType.DefaultGateway;
+            customPingTargetUserInput = null;
+            isCustomHostResolutionError = false;
+            currentResolvedPingAddress = networkMonitor.CurrentGateway;
+            knownAPManager.SetLastCustomPingTarget(null);
+            LogActivePingTarget();
+            UpdateMenuPingTargetDisplay();
+            if (!string.IsNullOrEmpty(currentResolvedPingAddress)) { await pingService.SendPingAsync(currentResolvedPingAddress, PING_TIMEOUT_MS); }
+            else { ShowErrorState("GW?"); loggingService.LogInfo("Default Gateway unavailable."); }
         }
 
-        private void BssidResetTimer_Elapsed(object sender, ElapsedEventArgs e)
+        public async Task SetPingTargetToCustomHostAsync(string hostInput, bool isInitialLoad = false)
         {
             if (isDisposed) return;
+            if (string.IsNullOrWhiteSpace(hostInput)) { loggingService.LogError("Empty custom host.", new ArgumentException("Host empty.", nameof(hostInput))); ShowErrorState("HOST?"); return; }
+            loggingService.LogInfo($"Setting ping target to Custom Host (input: {hostInput}). Initial load: {isInitialLoad}");
+            activePingTargetType = PingTargetType.CustomHost;
+            customPingTargetUserInput = hostInput.Trim();
+            isCustomHostResolutionError = false;
             try
             {
-                isInBssidTransition = false;
-                loggingService.LogInfo("BSSID transition window ended.");
-                if (!string.IsNullOrEmpty(networkMonitor.CurrentGateway))
-                {
-                    // Fire and forget a ping to refresh the display with normal colors.
-                    _ = pingService.SendPingAsync(networkMonitor.CurrentGateway, PING_TIMEOUT);
-                }
+                IPAddress[] addresses = await Dns.GetHostAddressesAsync(customPingTargetUserInput);
+                IPAddress chosenAddress = addresses.FirstOrDefault(ip => ip.AddressFamily == AddressFamily.InterNetwork) ?? addresses.FirstOrDefault(ip => ip.AddressFamily == AddressFamily.InterNetworkV6) ?? addresses.FirstOrDefault();
+                if (chosenAddress != null) { currentResolvedPingAddress = chosenAddress.ToString(); loggingService.LogInfo($"Resolved '{customPingTargetUserInput}' to '{currentResolvedPingAddress}'."); }
+                else { currentResolvedPingAddress = customPingTargetUserInput; isCustomHostResolutionError = true; loggingService.LogInfo($"Could not get preferred IP for '{customPingTargetUserInput}', will ping hostname."); }
             }
-            catch (Exception ex)
-            {
-                loggingService.LogError("Error handling BSSID reset timer elapsed", ex);
-            }
+            catch (SocketException ex) { currentResolvedPingAddress = customPingTargetUserInput; isCustomHostResolutionError = true; loggingService.LogError($"Failed to resolve '{customPingTargetUserInput}'. Ping will target hostname.", ex); }
+            catch (Exception ex) { currentResolvedPingAddress = customPingTargetUserInput; isCustomHostResolutionError = true; loggingService.LogError($"Error setting custom host '{customPingTargetUserInput}'.", ex); }
+            if (!isInitialLoad) { knownAPManager.SetLastCustomPingTarget(customPingTargetUserInput); }
+            LogActivePingTarget();
+            UpdateMenuPingTargetDisplay();
+            await pingService.SendPingAsync(currentResolvedPingAddress, PING_TIMEOUT_MS);
+        }
+
+        private void LogActivePingTarget()
+        {
+            if (activePingTargetType == PingTargetType.CustomHost) { loggingService.LogInfo($"Active ping target: Custom (User: '{customPingTargetUserInput}', Resolved: '{currentResolvedPingAddress}'). ResErr: {isCustomHostResolutionError}."); }
+            else { loggingService.LogInfo($"Active ping target: Default Gateway ('{networkMonitor.CurrentGateway ?? "N/A"}')."); }
         }
 
         private async void NetworkMonitor_GatewayChanged(object sender, string newGateway)
         {
             if (isDisposed) return;
-            try
+            loggingService.LogInfo($"GW changed: '{newGateway ?? "N"}' Active: {activePingTargetType}.");
+            bool menuNeedsUpdate = false;
+            if (activePingTargetType == PingTargetType.DefaultGateway)
             {
-                if (string.IsNullOrEmpty(newGateway))
-                {
-                    ShowErrorState("GW?");
-                    trayIconManager.UpdateCurrentAP(null, null, null);
-                    loggingService.LogInfo("Gateway became unavailable.");
-                }
-                else
-                {
-                    loggingService.LogInfo($"Gateway changed to: {newGateway}. Pinging new gateway.");
-                    await pingService.SendPingAsync(newGateway, PING_TIMEOUT);
-                }
+                currentResolvedPingAddress = newGateway;
+                LogActivePingTarget();
+                menuNeedsUpdate = true;
+                if (string.IsNullOrEmpty(newGateway)) { ShowErrorState("GW?"); trayIconManager.UpdateCurrentAP(null, null, null); }
+                else { await pingService.SendPingAsync(newGateway, PING_TIMEOUT_MS); }
             }
-            catch (Exception ex)
-            {
-                loggingService.LogError($"Error handling gateway change to '{newGateway}'", ex);
-            }
-        }
-
-        private void NetworkMonitor_NetworkAvailabilityChanged(object sender, bool isAvailable)
-        {
-            if (isDisposed) return;
-            try
-            {
-                if (!isAvailable)
-                {
-                    loggingService.LogInfo("Network became unavailable.");
-                    trayIconManager.UpdateCurrentAP(null, null, null);
-                    ShowErrorState("OFF");
-                }
-                else
-                {
-                    loggingService.LogInfo("Network became available.");
-                    // Gateway change event will likely handle the ping logic if gateway also changes.
-                }
-            }
-            catch (Exception ex)
-            {
-                loggingService.LogError($"Error handling network availability change (isAvailable: {isAvailable})", ex);
-            }
+            else { menuNeedsUpdate = true; }
+            if (menuNeedsUpdate) UpdateMenuPingTargetDisplay();
         }
 
         private void PingService_PingCompleted(object sender, PingReply reply)
         {
             if (isDisposed || reply == null) return;
-
             try
             {
-                string gateway = networkMonitor.CurrentGateway; // Cache for consistent logging
-                string bssid = networkStateManager.CurrentBssid; // Cache for consistent logging
-
+                string targetForLog = activePingTargetType == PingTargetType.CustomHost ? customPingTargetUserInput : networkMonitor.CurrentGateway;
+                targetForLog = string.IsNullOrEmpty(targetForLog) ? currentResolvedPingAddress : targetForLog;
                 if (reply.Status == IPStatus.Success)
                 {
-                    currentDisplayText = reply.RoundtripTime.ToString();
-                    string tooltipText = FormatTooltip(gateway, bssid);
-
-                    trayIconManager.UpdateIcon(
-                        currentDisplayText,
-                        tooltipText,
-                        false, // isError
-                        isInBssidTransition,
-                        isInBssidTransition  // useBlackText for transition
-                    );
-
-                    if (!isInBssidTransition)
-                    {
-                        // Avoid logging every successful ping during normal transition state updates.
-                        // Log only if not in BSSID transition, to reduce log spam.
-                        loggingService.LogInfo($"Ping successful - Target: {gateway}, Time: {reply.RoundtripTime}ms, BSSID: {bssid ?? "N/A"}");
-                    }
+                    currentIconDisplayText = reply.RoundtripTime.ToString();
+                    isCustomHostResolutionError = false;
+                    string tooltipText = FormatTooltip();
+                    trayIconManager.UpdateIcon(currentIconDisplayText, tooltipText, false, isInBssidTransition, isInBssidTransition);
+                    if (!isInBssidTransition) { loggingService.LogInfo($"Ping OK - Tgt: {targetForLog} ({currentResolvedPingAddress}), Time: {reply.RoundtripTime}ms, BSSID: {networkStateManager.CurrentBssid ?? "N/A"}"); }
                 }
                 else
                 {
-                    currentDisplayText = "X"; // Keep currentDisplayText updated for error states too
-                    string tooltipText = FormatTooltip(gateway, bssid);
-                    trayIconManager.UpdateIcon(currentDisplayText, tooltipText, true, false, false);
-                    loggingService.LogInfo($"Ping failed - Target: {gateway}, Status: {reply.Status}, BSSID: {bssid ?? "N/A"}");
+                    currentIconDisplayText = "X";
+                    string tooltipText = FormatTooltip(reply.Status.ToString());
+                    trayIconManager.UpdateIcon(currentIconDisplayText, tooltipText, true, false, false);
+                    loggingService.LogInfo($"Ping Fail - Tgt: {targetForLog} ({currentResolvedPingAddress}), Status: {reply.Status}, BSSID: {networkStateManager.CurrentBssid ?? "N/A"}");
                 }
             }
-            catch (Exception ex)
-            {
-                loggingService.LogError("Error handling ping reply", ex);
-            }
+            catch (Exception ex) { loggingService.LogError("Err handling ping reply", ex); }
         }
 
         private void PingService_PingError(object sender, Exception ex)
@@ -281,150 +258,71 @@ namespace ping_applet.Controllers
             if (isDisposed) return;
             try
             {
-                loggingService.LogError($"Ping error to {networkMonitor.CurrentGateway}", ex);
-                ShowErrorState("!");
+                string targetForLog = activePingTargetType == PingTargetType.CustomHost ? customPingTargetUserInput : networkMonitor.CurrentGateway;
+                targetForLog = string.IsNullOrEmpty(targetForLog) ? currentResolvedPingAddress : targetForLog;
+                loggingService.LogError($"Ping error to {targetForLog} ({currentResolvedPingAddress})", ex);
+                bool isDnsError = ex is SocketException se && (se.SocketErrorCode == SocketError.HostNotFound || se.SocketErrorCode == SocketError.TryAgain || se.SocketErrorCode == SocketError.NoData);
+                if (activePingTargetType == PingTargetType.CustomHost && isDnsError) { isCustomHostResolutionError = true; ShowErrorState("DNS", "Unresolvable"); }
+                else { ShowErrorState("!", ex.GetType().Name); }
             }
-            catch (Exception logEx)
-            {
-                Debug.WriteLine($"[AppController] Failed to log PingService_PingError: {logEx.Message}");
-            }
+            catch (Exception logEx) { Debug.WriteLine($"[AC] Failed log PingService_PingError: {logEx.Message}"); }
         }
 
-        private void ShowErrorState(string errorText)
+        private void ShowErrorState(string iconText, string specificErrorForTooltip = null)
+        {
+            if (isDisposed) return;
+            try { currentIconDisplayText = iconText; string tt = FormatTooltip(specificErrorForTooltip ?? "Error"); trayIconManager.UpdateIcon(iconText, tt, true, false, false); }
+            catch (Exception ex) { try { loggingService.LogError($"Err display state '{iconText}'", ex); } catch (Exception fEx) { Debug.WriteLine($"[AC] CRIT: Fail display state AND log: {fEx.Message}"); } }
+        }
+
+        private string FormatTooltip(string statusOverride = null)
+        {
+            if (isDisposed) return "App Disposed";
+            string line1, line2, line3;
+            string gwForTooltip = networkMonitor.CurrentGateway;
+            string bssidForTooltip = networkStateManager.CurrentBssid;
+            if (activePingTargetType == PingTargetType.CustomHost)
+            {
+                line1 = $"Pinging: {customPingTargetUserInput ?? currentResolvedPingAddress}";
+                if (isCustomHostResolutionError) line2 = "Error: Unresolvable";
+                else if (!string.IsNullOrEmpty(statusOverride)) line2 = $"Error: {statusOverride}";
+                else line2 = $"Latency: {currentIconDisplayText}ms";
+            }
+            else
+            {
+                line1 = $"GW: {gwForTooltip ?? "Not Connected"}";
+                if (!string.IsNullOrEmpty(statusOverride)) line2 = $"Error: {statusOverride}";
+                else line2 = $"Latency: {currentIconDisplayText}ms";
+            }
+            string apDisplay = "AP: N/A";
+            if (!string.IsNullOrEmpty(bssidForTooltip) && trayIconManager != null && !trayIconManager.IsDisposed)
+            { try { apDisplay = $"AP: {trayIconManager.GetAPDisplayName(bssidForTooltip)}"; } catch (ObjectDisposedException) { apDisplay = "AP: (mgr dispo)"; } catch (Exception ex) { apDisplay = "AP: (err)"; Debug.WriteLine($"[AC] Err fmt tooltip (GetAPDisplayName): {ex.Message}"); } }
+            line3 = apDisplay;
+            return $"{line1}\n{line2}\n{line3}";
+        }
+
+        private void OnQuitRequested(object sender, EventArgs e) { if (isDisposed) return; ApplicationExit?.Invoke(this, EventArgs.Empty); }
+        private void NetworkStateManager_LocationServicesStateChanged(object sender, bool isEnabled) { if (isDisposed) return; try { trayIconManager.UpdateLocationServicesState(!isEnabled); loggingService.LogInfo(isEnabled ? "LS Enabled - AP tracking resumed" : "LS Disabled - AP tracking off"); } catch (Exception ex) { loggingService.LogError("Err LS state change", ex); } }
+
+        // Event handler for System.Timers.Timer.Elapsed
+        private void BssidResetTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             if (isDisposed) return;
             try
             {
-                currentDisplayText = errorText;
-                string tooltipText = FormatTooltip(networkMonitor.CurrentGateway, networkStateManager.CurrentBssid);
-                trayIconManager.UpdateIcon(errorText, tooltipText, true, false, false);
+                isInBssidTransition = false;
+                loggingService.LogInfo("BSSID transition end.");
+                if (!string.IsNullOrEmpty(currentResolvedPingAddress)) Task.Run(() => pingService.SendPingAsync(currentResolvedPingAddress, PING_TIMEOUT_MS)); // Fire and forget for UI refresh
             }
-            catch (Exception ex)
-            {
-                // If trayIconManager itself fails, log via loggingService if possible,
-                // or fallback to Debug.WriteLine if loggingService is the issue.
-                try
-                {
-                    loggingService.LogError($"Error displaying error state '{errorText}'", ex);
-                }
-                catch (Exception finalEx)
-                {
-                    Debug.WriteLine($"[AppController] CRITICAL: Failed to display error state AND failed to log it: {finalEx.Message}");
-                }
-            }
+            catch (Exception ex) { loggingService.LogError("Err BSSID reset timer", ex); }
         }
 
-        private string FormatTooltip(string gateway, string bssid)
-        {
-            if (isDisposed) return "App Disposed";
-            var gwText = string.IsNullOrEmpty(gateway) ? "GW: Not Connected" : $"GW: {gateway}";
-            string apDisplay = "AP: N/A"; // Default if bssid is null or trayIconManager not available
+        private void NetworkStateManager_BssidChanged(object sender, BssidChangeEventArgs e) { if (isDisposed) return; try { isInBssidTransition = true; bssidResetTimer.Stop(); bssidResetTimer.Start(); trayIconManager.UpdateCurrentAP(e.NewBssid, networkStateManager.CurrentBand, networkStateManager.CurrentSsid); trayIconManager.ShowTransitionBalloon(e.OldBssid, e.NewBssid); if (!string.IsNullOrEmpty(currentIconDisplayText)) { string tt = FormatTooltip(); trayIconManager.UpdateIcon(currentIconDisplayText, tt, isCustomHostResolutionError || currentIconDisplayText == "X" || currentIconDisplayText == "!", true, true); } loggingService.LogInfo($"BSSID {e.OldBssid ?? "N"}->{e.NewBssid ?? "N"}. Transition."); UpdateMenuPingTargetDisplay(); } catch (Exception ex) { loggingService.LogError("Err BSSID change", ex); } }
+        private void NetworkMonitor_NetworkAvailabilityChanged(object sender, bool isAvailable) { if (isDisposed) return; try { loggingService.LogInfo(isAvailable ? "Net available." : "Net unavailable."); if (!isAvailable) { trayIconManager.UpdateCurrentAP(null, null, null); if (activePingTargetType == PingTargetType.DefaultGateway) ShowErrorState("OFF", "Net Down"); else ShowErrorState("NET?", "Net Down"); } else if (!string.IsNullOrEmpty(currentResolvedPingAddress)) Task.Run(() => pingService.SendPingAsync(currentResolvedPingAddress, PING_TIMEOUT_MS)); UpdateMenuPingTargetDisplay(); } catch (Exception ex) { loggingService.LogError($"Err net avail change (avail: {isAvailable})", ex); } }
 
-            if (!string.IsNullOrEmpty(bssid) && trayIconManager != null)
-            {
-                // trayIconManager may be disposed before AppController in some shutdown paths,
-                // though AppController.Dispose *should* handle trayIconManager.Dispose().
-                // This check is defensive.
-                try
-                {
-                    apDisplay = $"AP: {trayIconManager.GetAPDisplayName(bssid)}";
-                }
-                catch (ObjectDisposedException)
-                {
-                    apDisplay = "AP: (mgr disposed)";
-                }
-                catch (Exception ex)
-                {
-                    apDisplay = "AP: (error)";
-                    Debug.WriteLine($"[AppController] Error formatting tooltip (GetAPDisplayName): {ex.Message}");
-                }
-            }
-            return $"{gwText}\n{apDisplay}";
-        }
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!isDisposed)
-            {
-                if (disposing)
-                {
-                    // PRD AC2.1.AC4: Log final shutdown message *before* loggingService is disposed.
-                    // Ensure loggingService is still valid here.
-                    try
-                    {
-                        loggingService?.LogInfo("AppController: PingApplet shutting down. Disposing resources.");
-                    }
-                    catch (Exception ex)
-                    {
-                        // If loggingService itself is faulty at this point, use Debug.
-                        Debug.WriteLine($"[AppController] Dispose: Failed to write final log message: {ex.Message}");
-                    }
-
-                    Debug.WriteLine("[AppController] Dispose(true): Starting resource disposal.");
-
-                    // 1. Unsubscribe from all events to prevent handlers from firing on disposed objects.
-                    UnsubscribeFromEvents();
-
-                    // 2. Dispose timers.
-                    try
-                    {
-                        bssidResetTimer?.Stop();
-                        bssidResetTimer?.Dispose();
-                        Debug.WriteLine("[AppController] Dispose: bssidResetTimer disposed.");
-                    }
-                    catch (Exception ex) { Debug.WriteLine($"[AppController] Dispose: Error disposing bssidResetTimer: {ex.Message}"); }
-
-                    // 3. Dispose services. Order can be important.
-                    // Services that depend on others should be disposed before their dependencies if possible,
-                    // or in an order that minimizes issues.
-                    // PingService depends on NetworkMonitor.
-                    // NetworkStateManager depends on LoggingService.
-                    // TrayIconManager holds other UI elements and KnownAPManager (which uses LoggingService).
-
-                    SafelyDispose(pingService, nameof(pingService));
-                    SafelyDispose(networkStateManager, nameof(networkStateManager)); // Uses loggingService
-                    SafelyDispose(networkMonitor, nameof(networkMonitor));
-                    SafelyDispose(trayIconManager, nameof(trayIconManager));     // Uses loggingService
-
-                    // 4. Dispose LoggingService LAST.
-                    SafelyDispose(loggingService, nameof(loggingService), true); // Mark as last one for special debug message
-
-                    Debug.WriteLine("[AppController] Dispose(true): All managed resources have been processed for disposal.");
-                }
-                isDisposed = true;
-            }
-        }
-
-        private void SafelyDispose(IDisposable resource, string resourceName, bool isLastResource = false)
-        {
-            if (resource != null)
-            {
-                try
-                {
-                    resource.Dispose();
-                    Debug.WriteLine($"[AppController] Dispose: {resourceName} disposed successfully.");
-                }
-                catch (Exception ex)
-                {
-                    // If loggingService is the one being disposed or already gone, this log won't work.
-                    // Fallback to Debug.WriteLine for errors during disposal.
-                    Debug.WriteLine($"[AppController] Dispose: Error disposing {resourceName}: {ex.Message}{Environment.NewLine}Stack Trace: {ex.StackTrace}");
-                    if (resource is ILoggingService && !isLastResource)
-                    {
-                        Debug.WriteLine($"[AppController] CRITICAL: LoggingService threw an error during its disposal but was not the last item. Subsequent logs may fail.");
-                    }
-                }
-            }
-            else
-            {
-                Debug.WriteLine($"[AppController] Dispose: {resourceName} was null, no disposal needed.");
-            }
-        }
-
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
+        protected virtual void Dispose(bool disposing) { if (!isDisposed) { if (disposing) { try { loggingService?.LogInfo("AppController: Shutting down. Disposing resources."); } catch (Exception ex) { Debug.WriteLine($"[AC] Dispose: Failed final log: {ex.Message}"); } Debug.WriteLine("[AC] Dispose(true): Start."); UnsubscribeFromEvents(); SafelyStopAndDisposeTimer(periodicPingTimer, nameof(periodicPingTimer)); SafelyStopAndDisposeTimer(bssidResetTimer, nameof(bssidResetTimer)); SafelyDispose(pingService, nameof(pingService)); SafelyDispose(networkStateManager, nameof(networkStateManager)); SafelyDispose(networkMonitor, nameof(networkMonitor)); SafelyDispose(trayIconManager, nameof(trayIconManager)); SafelyDispose(loggingService, nameof(loggingService), true); Debug.WriteLine("[AC] Dispose(true): End."); } isDisposed = true; } }
+        private void SafelyStopAndDisposeTimer(System.Timers.Timer timer, string timerName) { if (timer != null) { try { timer.Stop(); timer.Dispose(); Debug.WriteLine($"[AC] Dispose: {timerName} disposed."); } catch (Exception ex) { Debug.WriteLine($"[AC] Dispose Err: {timerName}: {ex.Message}"); } } }
+        private void SafelyDispose(IDisposable resource, string resourceName, bool isLastResource = false) { if (resource != null) { try { resource.Dispose(); Debug.WriteLine($"[AC] Dispose: {resourceName} disposed."); } catch (Exception ex) { Debug.WriteLine($"[AC] Dispose Err {resourceName}: {ex.Message}{Environment.NewLine}{ex.StackTrace}"); if (resource is ILoggingService && !isLastResource) Debug.WriteLine($"[AC] CRIT: LoggingService err during dispose but not last."); } } else Debug.WriteLine($"[AC] Dispose: {resourceName} null."); }
+        public void Dispose() { Dispose(true); GC.SuppressFinalize(this); }
     }
 }

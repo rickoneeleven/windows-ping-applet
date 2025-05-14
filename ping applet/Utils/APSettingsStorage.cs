@@ -3,23 +3,17 @@ using System.IO;
 using Newtonsoft.Json;
 using ping_applet.Core.Interfaces;
 using ping_applet.Utils.Models;
+using System.Diagnostics; // For Debug.WriteLine
 
 namespace ping_applet.Utils
 {
-    /// <summary>
-    /// Handles loading and saving of AP settings to persistent storage
-    /// </summary>
     public class APSettingsStorage : IDisposable
     {
         private readonly ILoggingService _loggingService;
         private readonly string _settingsPath;
-        private readonly object _lockObject = new object();
+        private readonly object _fileLock = new object(); // Renamed for clarity to avoid confusion with thread locks
         private bool _isDisposed;
 
-        /// <summary>
-        /// Initializes a new instance of the APSettingsStorage class
-        /// </summary>
-        /// <param name="loggingService">The logging service to use</param>
         public APSettingsStorage(ILoggingService loggingService)
         {
             _loggingService = loggingService ?? throw new ArgumentNullException(nameof(loggingService));
@@ -28,91 +22,111 @@ namespace ping_applet.Utils
                 "PingApplet",
                 "known_aps.json"
             );
+            Debug.WriteLine($"[APSettingsStorage] Settings path configured to: {_settingsPath}");
         }
 
-        /// <summary>
-        /// Loads settings from the persistent storage
-        /// </summary>
-        /// <returns>The loaded settings or default settings if loading fails</returns>
         public APSettings LoadSettings()
         {
+            if (_isDisposed) throw new ObjectDisposedException(nameof(APSettingsStorage));
+            Debug.WriteLine("[APSettingsStorage] Attempting to load settings.");
+
             try
             {
-                if (File.Exists(_settingsPath))
+                lock (_fileLock)
                 {
-                    lock (_lockObject)
+                    if (File.Exists(_settingsPath))
                     {
+                        _loggingService.LogInfo($"Loading AP settings from: {_settingsPath}");
                         var json = File.ReadAllText(_settingsPath);
-                        var settings = JsonConvert.DeserializeObject<APSettings>(json) ?? new APSettings();
+                        var settings = JsonConvert.DeserializeObject<APSettings>(json);
 
-                        // Ensure all collections are initialized
-                        settings.BssidToName ??= new System.Collections.Generic.Dictionary<string, string>();
-                        settings.BssidToDetails ??= new System.Collections.Generic.Dictionary<string, APDetails>();
-                        settings.RootBssids ??= new System.Collections.Generic.List<string>();
-
-                        _loggingService.LogInfo("AP settings loaded successfully");
+                        if (settings == null)
+                        {
+                            _loggingService.LogInfo("AP settings file was empty or invalid; creating new default settings.");
+                            settings = new APSettings();
+                        }
+                        else
+                        {
+                            // Ensure collections are initialized if JSON had nulls (defensive)
+                            settings.BssidToName ??= new System.Collections.Generic.Dictionary<string, string>();
+                            settings.BssidToDetails ??= new System.Collections.Generic.Dictionary<string, APDetails>();
+                            settings.RootBssids ??= new System.Collections.Generic.List<string>();
+                            // LastCustomPingTarget will be null if not in JSON, which is fine.
+                            _loggingService.LogInfo($"AP settings loaded successfully. LastCustomPingTarget: '{settings.LastCustomPingTarget ?? "Not Set"}'.");
+                        }
                         return settings;
                     }
+                    else
+                    {
+                        _loggingService.LogInfo($"AP settings file not found at {_settingsPath}. Returning new default settings.");
+                        return new APSettings(); // Return new object with defaults
+                    }
                 }
-
-                return new APSettings();
+            }
+            catch (JsonException jsonEx)
+            {
+                _loggingService.LogError($"Failed to deserialize AP settings from {_settingsPath}. File might be corrupt. Returning defaults.", jsonEx);
+                return new APSettings(); // Critical to return defaults on error
             }
             catch (Exception ex)
             {
-                _loggingService.LogError("Failed to load AP settings", ex);
-                return new APSettings(); // Use defaults on error
+                _loggingService.LogError($"Failed to load AP settings from {_settingsPath}. Returning defaults.", ex);
+                return new APSettings(); // Critical to return defaults on error
             }
         }
 
-        /// <summary>
-        /// Saves settings to the persistent storage
-        /// </summary>
-        /// <param name="settings">The settings to save</param>
-        /// <returns>True if saving was successful, false otherwise</returns>
         public bool SaveSettings(APSettings settings)
         {
+            if (_isDisposed) throw new ObjectDisposedException(nameof(APSettingsStorage));
+            if (settings == null)
+            {
+                _loggingService.LogError("Attempted to save null APSettings. Operation aborted.", new ArgumentNullException(nameof(settings)));
+                return false;
+            }
+            Debug.WriteLine("[APSettingsStorage] Attempting to save settings.");
+
             try
             {
-                lock (_lockObject)
+                lock (_fileLock)
                 {
-                    // Ensure directory exists
                     string directory = Path.GetDirectoryName(_settingsPath);
                     if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                     {
+                        _loggingService.LogInfo($"Creating directory for AP settings: {directory}");
                         Directory.CreateDirectory(directory);
                     }
 
                     var json = JsonConvert.SerializeObject(settings, Formatting.Indented);
                     File.WriteAllText(_settingsPath, json);
+                    _loggingService.LogInfo($"AP settings saved successfully to {_settingsPath}. LastCustomPingTarget: '{settings.LastCustomPingTarget ?? "Not Set"}'.");
                     return true;
                 }
             }
             catch (Exception ex)
             {
-                _loggingService.LogError("Failed to save AP settings", ex);
+                _loggingService.LogError($"Failed to save AP settings to {_settingsPath}", ex);
                 return false;
             }
         }
 
-        /// <summary>
-        /// Disposes resources used by this class
-        /// </summary>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_isDisposed)
+            {
+                if (disposing)
+                {
+                    // No managed resources to dispose directly in this class other than what the GC handles.
+                    // _loggingService is injected and disposed by its owner.
+                    Debug.WriteLine("[APSettingsStorage] Disposed.");
+                }
+                _isDisposed = true;
+            }
+        }
+
         public void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);
-        }
-
-        /// <summary>
-        /// Disposes resources used by this class
-        /// </summary>
-        /// <param name="disposing">Whether to dispose managed resources</param>
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!_isDisposed && disposing)
-            {
-                _isDisposed = true;
-            }
         }
     }
 }

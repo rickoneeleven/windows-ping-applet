@@ -3,32 +3,29 @@ using System.Collections.Generic;
 using System.Linq;
 using ping_applet.Core.Interfaces;
 using ping_applet.Utils.Models;
+using System.Diagnostics; // For Debug.WriteLine
 
 namespace ping_applet.Utils
 {
-    /// <summary>
-    /// Manages the storage and organization of known access points (APs)
-    /// </summary>
     public class KnownAPManager : IDisposable
     {
         private readonly ILoggingService _loggingService;
         private readonly APSettingsStorage _settingsStorage;
         private readonly APDisplayFormatter _displayFormatter;
+
         private readonly Dictionary<string, string> _bssidToName;
         private readonly Dictionary<string, APDetails> _bssidToDetails;
         private readonly HashSet<string> _rootBssids;
+
         private APSettings _settings;
         private bool _isDisposed;
 
-        /// <summary>
-        /// Initializes a new instance of the KnownAPManager class
-        /// </summary>
-        /// <param name="loggingService">The logging service to use</param>
         public KnownAPManager(ILoggingService loggingService)
         {
             _loggingService = loggingService ?? throw new ArgumentNullException(nameof(loggingService));
-            _settingsStorage = new APSettingsStorage(loggingService);
+            _settingsStorage = new APSettingsStorage(_loggingService);
             _displayFormatter = new APDisplayFormatter();
+
             _bssidToName = new Dictionary<string, string>();
             _bssidToDetails = new Dictionary<string, APDetails>();
             _rootBssids = new HashSet<string>();
@@ -37,18 +34,15 @@ namespace ping_applet.Utils
             try
             {
                 LoadSettings();
-                _loggingService.LogInfo("KnownAPManager initialized successfully");
+                _loggingService.LogInfo($"KnownAPManager initialized. LastCustomPingTarget on init: '{_settings.LastCustomPingTarget ?? "Not Set"}'.");
             }
             catch (Exception ex)
             {
-                _loggingService.LogError("Failed to initialize KnownAPManager", ex);
+                _loggingService.LogError("Failed to initialize KnownAPManager during LoadSettings.", ex);
                 throw;
             }
         }
 
-        /// <summary>
-        /// Gets all known BSSIDs that are in the root level
-        /// </summary>
         public IEnumerable<string> RootBssids
         {
             get
@@ -58,49 +52,68 @@ namespace ping_applet.Utils
             }
         }
 
-        /// <summary>
-        /// Gets all known BSSIDs that are in the unsorted category
-        /// </summary>
         public IEnumerable<string> UnsortedBssids
         {
             get
             {
                 ThrowIfDisposed();
-                return _bssidToName.Keys.Except(_rootBssids).ToList();
+                var allKnownKeys = _bssidToName.Keys.ToList();
+                return allKnownKeys.Except(_rootBssids).ToList();
             }
         }
 
-        /// <summary>
-        /// Gets whether notifications are enabled
-        /// </summary>
         public bool GetNotificationsEnabled()
         {
             ThrowIfDisposed();
             return _settings.NotificationsEnabled;
         }
 
-        /// <summary>
-        /// Sets whether notifications are enabled
-        /// </summary>
         public void SetNotificationsEnabled(bool enabled)
         {
             ThrowIfDisposed();
             try
             {
-                _settings.NotificationsEnabled = enabled;
-                SaveSettings();
-                _loggingService.LogInfo($"Notifications {(enabled ? "enabled" : "disabled")}");
+                if (_settings.NotificationsEnabled != enabled)
+                {
+                    _settings.NotificationsEnabled = enabled;
+                    SaveSettings();
+                    _loggingService.LogInfo($"User notifications preference changed to: {(enabled ? "Enabled" : "Disabled")}");
+                }
             }
             catch (Exception ex)
             {
-                _loggingService.LogError("Failed to set notifications state", ex);
+                _loggingService.LogError("Failed to set notifications state in KnownAPManager.", ex);
                 throw;
             }
         }
 
-        /// <summary>
-        /// Adds a new AP to the unsorted category
-        /// </summary>
+        public string GetLastCustomPingTarget()
+        {
+            ThrowIfDisposed();
+            Debug.WriteLine($"[KnownAPManager] GetLastCustomPingTarget called. Returning: '{_settings.LastCustomPingTarget ?? "null"}'");
+            return _settings.LastCustomPingTarget;
+        }
+
+        public void SetLastCustomPingTarget(string target)
+        {
+            ThrowIfDisposed();
+            try
+            {
+                string previousTarget = _settings.LastCustomPingTarget;
+                if (previousTarget != target)
+                {
+                    _settings.LastCustomPingTarget = target;
+                    SaveSettings();
+                    _loggingService.LogInfo($"Last custom ping target changed from '{previousTarget ?? "Not Set"}' to '{target ?? "Not Set"}'.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogError($"Failed to set last custom ping target to '{target}'.", ex);
+                throw;
+            }
+        }
+
         public void AddNewAP(string bssid)
         {
             ThrowIfDisposed();
@@ -111,10 +124,10 @@ namespace ping_applet.Utils
             {
                 if (!_bssidToName.ContainsKey(bssid))
                 {
-                    _bssidToName[bssid] = bssid; // Default name is the BSSID itself
-                    _bssidToDetails[bssid] = new APDetails(); // Initialize with empty details
+                    _bssidToName[bssid] = bssid;
+                    _bssidToDetails[bssid] = new APDetails();
                     SaveSettings();
-                    _loggingService.LogInfo($"Added new AP: {bssid}");
+                    _loggingService.LogInfo($"Added new AP (unsorted): {bssid}");
                 }
             }
             catch (Exception ex)
@@ -124,9 +137,6 @@ namespace ping_applet.Utils
             }
         }
 
-        /// <summary>
-        /// Updates the network details for an AP
-        /// </summary>
         public void UpdateAPDetails(string bssid, string band, string ssid)
         {
             ThrowIfDisposed();
@@ -135,27 +145,20 @@ namespace ping_applet.Utils
 
             try
             {
-                // Ensure the AP exists in our dictionary
                 if (!_bssidToName.ContainsKey(bssid))
                 {
+                    _loggingService.LogInfo($"AP {bssid} not known. Adding before updating details.");
                     AddNewAP(bssid);
                 }
 
-                // Create or update details
-                if (!_bssidToDetails.TryGetValue(bssid, out var details))
-                {
-                    details = new APDetails();
-                    _bssidToDetails[bssid] = details;
-                }
-
-                // Only update if we have valid data
+                var details = _bssidToDetails[bssid];
                 bool updated = false;
+
                 if (!string.IsNullOrEmpty(band) && details.Band != band)
                 {
                     details.Band = band;
                     updated = true;
                 }
-
                 if (!string.IsNullOrEmpty(ssid) && details.SSID != ssid)
                 {
                     details.SSID = ssid;
@@ -164,39 +167,37 @@ namespace ping_applet.Utils
 
                 if (updated)
                 {
-                    _loggingService.LogInfo($"Updated details for AP {bssid}: Band={band}, SSID={ssid}");
+                    _loggingService.LogInfo($"Updated details for AP {bssid}: Band='{band ?? "N/A"}', SSID='{ssid ?? "N/A"}'");
                     SaveSettings();
                 }
             }
             catch (Exception ex)
             {
                 _loggingService.LogError($"Failed to update details for AP {bssid}", ex);
-                // Don't throw - this is a non-critical operation
             }
         }
 
-        /// <summary>
-        /// Renames an AP with a custom friendly name
-        /// </summary>
         public void RenameAP(string bssid, string newName)
         {
             ThrowIfDisposed();
-            if (string.IsNullOrEmpty(bssid))
-                throw new ArgumentNullException(nameof(bssid));
-            if (string.IsNullOrEmpty(newName))
-                throw new ArgumentNullException(nameof(newName));
+            if (string.IsNullOrEmpty(bssid)) throw new ArgumentNullException(nameof(bssid));
+            if (string.IsNullOrWhiteSpace(newName)) throw new ArgumentException("New name cannot be empty or whitespace.", nameof(newName));
 
             try
             {
-                if (_bssidToName.ContainsKey(bssid))
+                if (_bssidToName.TryGetValue(bssid, out string oldName))
                 {
-                    _bssidToName[bssid] = newName;
-                    SaveSettings();
-                    _loggingService.LogInfo($"Renamed AP {bssid} to: {newName}");
+                    if (oldName != newName)
+                    {
+                        _bssidToName[bssid] = newName;
+                        SaveSettings();
+                        _loggingService.LogInfo($"Renamed AP {bssid} from '{oldName}' to: '{newName}'");
+                    }
                 }
                 else
                 {
-                    throw new KeyNotFoundException($"BSSID not found: {bssid}");
+                    // Corrected LogWarn to LogInfo with a prefix
+                    _loggingService.LogInfo($"WARNING: Attempted to rename non-existent AP: {bssid}.");
                 }
             }
             catch (Exception ex)
@@ -206,33 +207,35 @@ namespace ping_applet.Utils
             }
         }
 
-        /// <summary>
-        /// Moves an AP to the root level or back to unsorted
-        /// </summary>
         public void SetAPRoot(string bssid, bool isRoot)
         {
             ThrowIfDisposed();
-            if (string.IsNullOrEmpty(bssid))
-                throw new ArgumentNullException(nameof(bssid));
+            if (string.IsNullOrEmpty(bssid)) throw new ArgumentNullException(nameof(bssid));
 
             try
             {
                 if (!_bssidToName.ContainsKey(bssid))
                 {
-                    throw new KeyNotFoundException($"BSSID not found: {bssid}");
+                    // Corrected LogWarn to LogInfo with a prefix
+                    _loggingService.LogInfo($"WARNING: Attempted to set root status for non-existent AP: {bssid}.");
+                    return;
                 }
 
+                bool changed = false;
                 if (isRoot)
                 {
-                    _rootBssids.Add(bssid);
+                    if (_rootBssids.Add(bssid)) changed = true;
                 }
                 else
                 {
-                    _rootBssids.Remove(bssid);
+                    if (_rootBssids.Remove(bssid)) changed = true;
                 }
 
-                SaveSettings();
-                _loggingService.LogInfo($"Set AP {bssid} root status to: {isRoot}");
+                if (changed)
+                {
+                    SaveSettings();
+                    _loggingService.LogInfo($"Set AP {bssid} root status to: {isRoot}");
+                }
             }
             catch (Exception ex)
             {
@@ -241,22 +244,27 @@ namespace ping_applet.Utils
             }
         }
 
-        /// <summary>
-        /// Deletes an AP from the known list
-        /// </summary>
         public void DeleteAP(string bssid)
         {
             ThrowIfDisposed();
-            if (string.IsNullOrEmpty(bssid))
-                throw new ArgumentNullException(nameof(bssid));
+            if (string.IsNullOrEmpty(bssid)) throw new ArgumentNullException(nameof(bssid));
 
             try
             {
-                _bssidToName.Remove(bssid);
-                _bssidToDetails.Remove(bssid);
-                _rootBssids.Remove(bssid);
-                SaveSettings();
-                _loggingService.LogInfo($"Deleted AP: {bssid}");
+                bool changed = false;
+                if (_bssidToName.Remove(bssid)) changed = true;
+                if (_bssidToDetails.Remove(bssid)) changed = true;
+                if (_rootBssids.Remove(bssid)) changed = true;
+
+                if (changed)
+                {
+                    SaveSettings();
+                    _loggingService.LogInfo($"Deleted AP data for: {bssid}");
+                }
+                else
+                {
+                    _loggingService.LogInfo($"Attempted to delete AP {bssid}, but it was not found in any collection.");
+                }
             }
             catch (Exception ex)
             {
@@ -265,127 +273,100 @@ namespace ping_applet.Utils
             }
         }
 
-        /// <summary>
-        /// Gets the display name for a BSSID, with optional network details
-        /// </summary>
         public string GetDisplayName(string bssid, bool includeDetails = true)
         {
             ThrowIfDisposed();
-
             if (string.IsNullOrEmpty(bssid))
                 return _displayFormatter.FormatDisconnectedText();
 
             try
             {
-                // Get the base name (custom or BSSID)
                 string baseName = _bssidToName.TryGetValue(bssid, out string name) ? name : bssid;
-
-                // If we're not including details or no details exist, return just the name
-                if (!includeDetails || !_bssidToDetails.TryGetValue(bssid, out var details))
+                if (!includeDetails || !_bssidToDetails.TryGetValue(bssid, out var details) || details == null)
+                {
                     return baseName;
-
-                // Use formatter to build the formatted name with network details
+                }
                 return _displayFormatter.FormatDisplayName(baseName, details);
             }
             catch (Exception ex)
             {
                 _loggingService.LogError($"Failed to get display name for AP: {bssid}", ex);
-                return bssid; // Fallback to BSSID on error
+                return bssid;
             }
         }
 
-        /// <summary>
-        /// Loads settings from persistent storage
-        /// </summary>
         private void LoadSettings()
         {
-            try
+            _settings = _settingsStorage.LoadSettings();
+
+            _bssidToName.Clear();
+            _bssidToDetails.Clear();
+            _rootBssids.Clear();
+
+            if (_settings.BssidToName != null)
             {
-                _settings = _settingsStorage.LoadSettings();
-
-                _bssidToName.Clear();
-                foreach (var kvp in _settings.BssidToName)
-                {
-                    _bssidToName[kvp.Key] = kvp.Value;
-                }
-
-                _bssidToDetails.Clear();
-                foreach (var kvp in _settings.BssidToDetails)
-                {
-                    _bssidToDetails[kvp.Key] = kvp.Value;
-                }
-
-                _rootBssids.Clear();
-                foreach (var bssid in _settings.RootBssids)
-                {
-                    _rootBssids.Add(bssid);
-                }
+                foreach (var kvp in _settings.BssidToName) _bssidToName[kvp.Key] = kvp.Value;
             }
-            catch (Exception ex)
+            if (_settings.BssidToDetails != null)
             {
-                _loggingService.LogError("Error loading settings, using defaults", ex);
-                _settings = new APSettings();
+                foreach (var kvp in _settings.BssidToDetails) _bssidToDetails[kvp.Key] = kvp.Value;
             }
+            if (_settings.RootBssids != null)
+            {
+                foreach (var bssidValue in _settings.RootBssids) _rootBssids.Add(bssidValue); // Corrected variable name
+            }
+            _loggingService.LogInfo($"KnownAPManager: Settings loaded into working collections. Found {_bssidToName.Count} named APs, {_rootBssids.Count} root APs.");
         }
 
-        /// <summary>
-        /// Saves settings to persistent storage
-        /// </summary>
         private void SaveSettings()
         {
-            try
-            {
-                _settings.BssidToName = new Dictionary<string, string>(_bssidToName);
-                _settings.BssidToDetails = new Dictionary<string, APDetails>(_bssidToDetails);
-                _settings.RootBssids = _rootBssids.ToList();
+            _settings.BssidToName = new Dictionary<string, string>(_bssidToName);
+            _settings.BssidToDetails = new Dictionary<string, APDetails>(_bssidToDetails);
+            _settings.RootBssids = _rootBssids.ToList();
 
-                if (!_settingsStorage.SaveSettings(_settings))
-                {
-                    _loggingService.LogError("Failed to save settings via storage");
-                }
-            }
-            catch (Exception ex)
+            if (!_settingsStorage.SaveSettings(_settings))
             {
-                _loggingService.LogError("Error saving settings", ex);
-                throw;
+                _loggingService.LogError("KnownAPManager: SaveSettings failed at APSettingsStorage level.");
+            }
+            else
+            {
+                _loggingService.LogInfo("KnownAPManager: Settings successfully prepared and saved via APSettingsStorage.");
             }
         }
 
-        /// <summary>
-        /// Throws an ObjectDisposedException if this object has been disposed
-        /// </summary>
         private void ThrowIfDisposed()
         {
             if (_isDisposed)
-            {
                 throw new ObjectDisposedException(nameof(KnownAPManager));
-            }
         }
 
-        /// <summary>
-        /// Disposes resources used by this class
-        /// </summary>
-        /// <param name="disposing">Whether to dispose managed resources</param>
         protected virtual void Dispose(bool disposing)
         {
-            if (!_isDisposed && disposing)
+            if (!_isDisposed)
             {
-                try
+                if (disposing)
                 {
-                    SaveSettings();
-                    _settingsStorage.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    _loggingService.LogError("Error during disposal", ex);
+                    Debug.WriteLine("[KnownAPManager] Disposing.");
+                    try
+                    {
+                        if (_settings != null && _settingsStorage != null)
+                        {
+                            _loggingService.LogInfo("KnownAPManager disposing. Attempting final save of settings.");
+                            SaveSettings();
+                        }
+
+                        _settingsStorage?.Dispose();
+                        _loggingService.LogInfo("KnownAPManager disposed.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"[KnownAPManager] Error during disposal: {ex.Message}");
+                    }
                 }
                 _isDisposed = true;
             }
         }
 
-        /// <summary>
-        /// Disposes resources used by this class
-        /// </summary>
         public void Dispose()
         {
             Dispose(true);

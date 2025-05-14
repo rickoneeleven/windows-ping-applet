@@ -1,2 +1,0 @@
-- need to introduce a a cleaner way for the app to exit/close on shutdown. each time i shutdown PC's that have this app loaded, I get a 
-critical error message that stops the machine from auto shutting down. Needs to be graceful.
